@@ -93,6 +93,7 @@ def _mysql_import(sql_file: str, db_name: str, config: AppConfig):
         f"--user={mc.user}",
         f"--password={mc.password}",
         "--default-character-set=utf8mb4",
+        "--ssl-mode=DISABLED",
     ]
     # ensure database exists first
     ret = subprocess.run(
