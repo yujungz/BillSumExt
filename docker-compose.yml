@@ -22,7 +22,7 @@ services:
       - BillSumExt_net
     restart: unless-stopped
 
-  BillSumExt-app:
+  billsumext-app:
     build:
       context: .
       dockerfile: deploy.Dockerfile
