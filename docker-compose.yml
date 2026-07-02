@@ -28,7 +28,8 @@ services:
       dockerfile: deploy.Dockerfile
     container_name: billsum-app
     ports:
-      - "8089:80"
+      - "8090:443"
+      - "8091:80"
     volumes:
       - app_data:/app/data
       - /e/work/(03)burncloud/ssh:/ssh_keys:ro

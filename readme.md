@@ -55,7 +55,11 @@ docker-compose up -d --build
 
 ### 3.3 访问应用
 
-浏览器打开 **http://localhost:8089**
+| 环境 | 地址 | 说明 |
+|------|------|------|
+| 本地测试 | **http://localhost:8091** | HTTP |
+| 远程服务器 | **https://shadow.burncloud.com:8090** | HTTPS（自签名证书） |
+| 远程服务器 | **http://shadow.burncloud.com:8091** | HTTP |
 
 ### 3.4 首次配置
 

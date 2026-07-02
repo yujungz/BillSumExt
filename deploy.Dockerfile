@@ -8,7 +8,7 @@ RUN npm run build
 FROM python:3.11-slim
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y nginx default-mysql-client && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y nginx openssl default-mysql-client && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
@@ -22,4 +22,5 @@ COPY entrypoint.sh .
 RUN chmod +x entrypoint.sh
 
 EXPOSE 80
+EXPOSE 443
 ENTRYPOINT ["./entrypoint.sh"]

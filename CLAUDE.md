@@ -11,10 +11,10 @@ cd backend && pip install -r requirements.txt && uvicorn app.main:app --reload -
 # Frontend dev (Vite + HMR, proxies /api -> :8000)
 cd frontend && npm install && npm run dev
 
-# Production deploy (single container, Docker)
-docker network create billsum_net
-docker network connect billsum_net test-mysql8
+# Production deploy (two containers: app + MySQL, fully self-contained)
 docker-compose up -d --build
+
+# Access: http://localhost:8091 or https://localhost:8090
 
 # View logs
 docker logs -f billsum-app
