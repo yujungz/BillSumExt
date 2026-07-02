@@ -86,6 +86,17 @@ def _time_range(period_type: str, ym: str = "", date_start: str = "", date_end: 
 def _mysql_import(sql_file: str, db_name: str, config: AppConfig):
     """Import a SQL dump file using mysql CLI client (handles large dumps)."""
     mc = config.mysql
+    # ensure database exists first (new MySQL container may not have it yet)
+    _cmd = [
+        "mysql",
+        f"--host={mc.host}",
+        f"--port={mc.port}",
+        f"--user={mc.user}",
+        f"--password={mc.password}",
+        "-e",
+        f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
+    ]
+    subprocess.run(_cmd, capture_output=True, text=True, timeout=30)
     cmd = [
         "mysql",
         f"--host={mc.host}",
@@ -93,7 +104,6 @@ def _mysql_import(sql_file: str, db_name: str, config: AppConfig):
         f"--user={mc.user}",
         f"--password={mc.password}",
         "--default-character-set=utf8mb4",
-        "--skip-ssl",
         db_name,
     ]
     with open(sql_file, "r", encoding="utf-8") as f:

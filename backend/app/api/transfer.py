@@ -40,7 +40,10 @@ async def download_remote(req: TransferRequest):
 @router.post("/import")
 async def import_local(req: TransferRequest):
     log_name = transfer_service._log_name(req.period_type, req.ym, req.date_start, req.date_end)
-    result = await transfer_service.import_local(req.site, log_name, req.tables)
+    try:
+        result = await transfer_service.import_local(req.site, log_name, req.tables)
+    except Exception as e:
+        raise HTTPException(500, detail=f"Import failed: {str(e)}")
     if not result["success"]:
         raise HTTPException(400, detail=result.get("error", "Import failed"))
     return result
