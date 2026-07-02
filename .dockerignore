@@ -1,0 +1,17 @@
+.git
+.gitignore
+.vscode
+__pycache__
+*.pyc
+node_modules/
+frontend/node_modules/
+frontend/dist/
+data/
+mysql-init/
+memory/
+*.md
+CLAUDE.md
+readme.md
+docker-compose.yml
+.gitignore
+.dockerignore
