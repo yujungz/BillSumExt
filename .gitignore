@@ -9,3 +9,5 @@ backend/**/__pycache__/
 *.local
 *.log
 /data/
+frontend/dist/
+memory/
