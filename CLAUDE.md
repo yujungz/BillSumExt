@@ -17,7 +17,7 @@ docker-compose up -d --build
 # Access: http://localhost:8091 or https://localhost:8090
 
 # View logs
-docker logs -f billsum-app
+docker logs -f BillSumExt-app
 ```
 
 ## Architecture Overview

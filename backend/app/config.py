@@ -58,7 +58,7 @@ class MySQLConfig(BaseModel):
     port: int = int(os.getenv("MYSQL_PORT", "3306"))
     user: str = os.getenv("MYSQL_USER", "root")
     password: str = os.getenv("MYSQL_PASSWORD", "123456")
-    container_name: str = os.getenv("MYSQL_CONTAINER", "billsum-mysql")
+    container_name: str = os.getenv("MYSQL_CONTAINER", "BillSumExt-mysql")
 
 
 class SSHRemoteConfig(BaseModel):

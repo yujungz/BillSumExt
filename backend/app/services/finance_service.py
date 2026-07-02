@@ -590,7 +590,7 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
             ws_detail.append(total_row_vals)
 
     # 4. Save to temp file
-    tmp_dir = os.path.join(tempfile.gettempdir(), "billsum_export")
+    tmp_dir = os.path.join(tempfile.gettempdir(), "BillSumExt_export")
     os.makedirs(tmp_dir, exist_ok=True)
     file_path = os.path.join(tmp_dir, f"{task_id}.xlsx")
     log.info(f"[export-{task_id}] Saving xlsx to {file_path}, monthly={len(monthly)}, daily={len(daily)}, detail={detail_total}")

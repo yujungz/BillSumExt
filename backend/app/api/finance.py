@@ -322,7 +322,7 @@ async def site_report_generate(body: dict):
     table = body.get("table")
     date_start = body.get("date_start")
     date_end = body.get("date_end")
-    output_root = body.get("output_root", "E:/Workspaces/claude/billsum/out")
+    output_root = body.get("output_root", "E:/Workspaces/claude/BillSumExt/out")
 
     if not all([site, table, date_start, date_end]):
         raise HTTPException(400, detail="参数不完整")

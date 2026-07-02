@@ -57,7 +57,7 @@ def _local_client_argv(ep: CondEndpoint, tool: str) -> list[str]:
     """Prefix argv for a mysql/mysqldump client running where the backend runs.
 
     Both modes connect over TCP (the backend process has the mysql/mysqldump
-    CLI but typically NOT the `docker` CLI — e.g. the billsum-app container —
+    CLI but typically NOT the `docker` CLI — e.g. the BillSumExt-app container —
     so we do NOT shell out to `docker exec`):
       docker mode -> host = container_name (resolves on the docker network,
                      same pattern the rest of the app uses via MYSQL_HOST).
