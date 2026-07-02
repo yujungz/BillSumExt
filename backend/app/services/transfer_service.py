@@ -86,17 +86,9 @@ def _time_range(period_type: str, ym: str = "", date_start: str = "", date_end: 
 def _mysql_import(sql_file: str, db_name: str, config: AppConfig):
     """Import a SQL dump file using mysql CLI client (handles large dumps)."""
     mc = config.mysql
-    # ensure database exists first (new MySQL container may not have it yet)
-    _cmd = [
-        "mysql",
-        f"--host={mc.host}",
-        f"--port={mc.port}",
-        f"--user={mc.user}",
-        f"--password={mc.password}",
-        "-e",
-        f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci",
-    ]
-    subprocess.run(_cmd, capture_output=True, text=True, timeout=30)
+    with open(sql_file, "r", encoding="utf-8") as f:
+        sql_content = f.read()
+    preamble = f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;\nUSE `{db_name}`;\n"
     cmd = [
         "mysql",
         f"--host={mc.host}",
@@ -104,10 +96,8 @@ def _mysql_import(sql_file: str, db_name: str, config: AppConfig):
         f"--user={mc.user}",
         f"--password={mc.password}",
         "--default-character-set=utf8mb4",
-        db_name,
     ]
-    with open(sql_file, "r", encoding="utf-8") as f:
-        proc = subprocess.run(cmd, stdin=f, capture_output=True, text=True, timeout=3600)
+    proc = subprocess.run(cmd, input=preamble + sql_content, capture_output=True, text=True, timeout=3600)
     if proc.returncode != 0:
         raise RuntimeError(f"MySQL import failed: {proc.stderr[:500]}")
     log.info(f"Imported {sql_file} into {db_name}")
