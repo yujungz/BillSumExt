@@ -1,4 +1,27 @@
 services:
+  mysql:
+    image: mysql:8.0
+    container_name: billsum-mysql
+    command: --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_CHARACTER_SET_SERVER: utf8mb4
+      MYSQL_COLLATION_SERVER: utf8mb4_0900_ai_ci
+    ports:
+      - "3307:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql-init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p123456"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+    networks:
+      - billsum_app_net
+    restart: unless-stopped
+
   billsum-app:
     build:
       context: .
@@ -9,18 +32,23 @@ services:
     volumes:
       - app_data:/app/data
       - /e/work/(03)burncloud/ssh:/ssh_keys:ro
-    networks:
-      - billsum_net
     environment:
-      - MYSQL_HOST=${MYSQL_HOST:-test-mysql8}
-      - MYSQL_PORT=${MYSQL_PORT:-3306}
-      - MYSQL_USER=${MYSQL_USER:-root}
-      - MYSQL_PASSWORD=${MYSQL_PASSWORD:-123456}
+      - MYSQL_HOST=billsum-mysql
+      - MYSQL_PORT=3306
+      - MYSQL_USER=root
+      - MYSQL_PASSWORD=123456
+      - MYSQL_CONTAINER=billsum-mysql
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - billsum_app_net
     restart: unless-stopped
 
 volumes:
   app_data:
+  mysql_data:
 
 networks:
-  billsum_net:
-    external: true
+  billsum_app_net:
+    driver: bridge
