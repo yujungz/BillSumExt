@@ -86,10 +86,7 @@ def _time_range(period_type: str, ym: str = "", date_start: str = "", date_end: 
 def _mysql_import(sql_file: str, db_name: str, config: AppConfig):
     """Import a SQL dump file using mysql CLI client (handles large dumps)."""
     mc = config.mysql
-    with open(sql_file, "r", encoding="utf-8") as f:
-        sql_content = f.read()
-    preamble = f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;\nUSE `{db_name}`;\n"
-    cmd = [
+    base_cmd = [
         "mysql",
         f"--host={mc.host}",
         f"--port={mc.port}",
@@ -97,7 +94,16 @@ def _mysql_import(sql_file: str, db_name: str, config: AppConfig):
         f"--password={mc.password}",
         "--default-character-set=utf8mb4",
     ]
-    proc = subprocess.run(cmd, input=preamble + sql_content, capture_output=True, text=True, timeout=3600)
+    # ensure database exists first
+    ret = subprocess.run(
+        base_cmd + ["-e", f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci"],
+        capture_output=True, text=True, timeout=30,
+    )
+    if ret.returncode != 0:
+        raise RuntimeError(f"Create database failed: {ret.stderr[:500]}")
+    # import SQL file directly (stdin pipe, no -e limit for large files)
+    with open(sql_file, "r", encoding="utf-8") as f:
+        proc = subprocess.run(base_cmd + [db_name], stdin=f, capture_output=True, text=True, timeout=3600)
     if proc.returncode != 0:
         raise RuntimeError(f"MySQL import failed: {proc.stderr[:500]}")
     log.info(f"Imported {sql_file} into {db_name}")
