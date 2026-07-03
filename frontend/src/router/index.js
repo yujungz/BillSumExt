@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { ElMessage } from 'element-plus'
 
 const routes = [
   { path: '/login', name: 'login', component: () => import('../views/LoginView.vue'), meta: { title: '登录', public: true } },
@@ -17,7 +18,7 @@ const router = createRouter({
 })
 
 // Navigation guard: require login for all routes except /login
-const ALLOWED_FOR_NORMAL = ['/query', '/stats', '/finance', '/system']
+const ALLOWED_FOR_NORMAL = ['/query', '/stats', '/finance']
 
 router.beforeEach((to, from, next) => {
   let user = null
@@ -38,8 +39,9 @@ router.beforeEach((to, from, next) => {
     return
   }
 
-  // Normal user trying to access restricted route — redirect to /query
+  // Normal user trying to access restricted route — redirect to /query with warning
   if (user.role !== 'super' && !ALLOWED_FOR_NORMAL.includes(to.path)) {
+    ElMessage.warning('无权限访问此功能')
     next('/query')
     return
   }

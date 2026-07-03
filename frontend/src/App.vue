@@ -8,13 +8,13 @@
       <div class="app-logo">BillSum</div>
       <el-menu
         :default-active="currentRoute"
-        router
         class="app-menu"
         background-color="#304156"
         text-color="#bfcbd9"
         active-text-color="#409eff"
+        @select="menuClick"
       >
-        <el-menu-item index="/transfer" v-if="canShow('/transfer')">
+        <el-menu-item index="/transfer">
           <el-icon><Upload /></el-icon>
           <span>数据传输</span>
         </el-menu-item>
@@ -30,11 +30,11 @@
           <el-icon><DataAnalysis /></el-icon>
           <span>财务报表</span>
         </el-menu-item>
-        <el-menu-item index="/config" v-if="canShow('/config')">
+        <el-menu-item index="/config">
           <el-icon><Setting /></el-icon>
           <span>参数配置</span>
         </el-menu-item>
-        <el-menu-item index="/system" v-if="canShow('/system')">
+        <el-menu-item index="/system">
           <el-icon><Monitor /></el-icon>
           <span>系统功能</span>
         </el-menu-item>
@@ -62,7 +62,7 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { Upload, Search, DataAnalysis, Setting, Monitor } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -70,7 +70,7 @@ const router = useRouter()
 const currentRoute = computed(() => route.path)
 const isLoginPage = computed(() => route.path === '/login')
 
-// Current user from localStorage (reactive by reading on every render)
+// Current user from localStorage
 const currentUser = computed(() => {
   try {
     return JSON.parse(localStorage.getItem('billsum_user'))
@@ -79,12 +79,21 @@ const currentUser = computed(() => {
   }
 })
 
-function canShow(menuPath) {
+const RESTRICTED = ['/transfer', '/config', '/system']
+
+function menuClick(index) {
   const user = currentUser.value
-  if (!user) return false
-  if (user.role === 'super') return true
-  const allowed = ['/query', '/stats', '/finance']
-  return allowed.includes(menuPath)
+  if (!user || user.role === 'super') {
+    router.push(index)
+    return
+  }
+  if (RESTRICTED.includes(index)) {
+    ElMessageBox.alert('当前用户无权限访问此功能，请联系超级管理员。', '无权限', {
+      type: 'warning', confirmButtonText: '确定', closeOnClickModal: true
+    })
+  } else {
+    router.push(index)
+  }
 }
 
 function doLogout() {
