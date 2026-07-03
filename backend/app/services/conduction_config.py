@@ -106,7 +106,7 @@ def _default_destination() -> CondEndpoint:
         os_type="windows",
         db=CondDB(
             user="root",
-            password="123456",
+            password="Bill1@3",
             db_name="shadow_manager",
             host="172.20.0.3",
             port=3306,

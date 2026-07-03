@@ -57,7 +57,7 @@ class MySQLConfig(BaseModel):
     host: str = os.getenv("MYSQL_HOST", "localhost")
     port: int = int(os.getenv("MYSQL_PORT", "3306"))
     user: str = os.getenv("MYSQL_USER", "root")
-    password: str = os.getenv("MYSQL_PASSWORD", "123456")
+    password: str = os.getenv("MYSQL_PASSWORD", "Bill1@3")
     container_name: str = os.getenv("MYSQL_CONTAINER", "BillSumExt-mysql")
 
 

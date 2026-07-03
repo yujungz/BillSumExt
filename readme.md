@@ -102,7 +102,7 @@ docker-compose up -d --build
 | 主机 | BillSumExt-mysql | Docker 网络内使用容器名 |
 | 端口 | 3306 | MySQL 端口 |
 | 用户名 | root | |
-| 密码 | 123456 | |
+| 密码 | Bill1@3 | |
 
 配置完成后点击 **「测试连接」** 验证。
 
