@@ -44,7 +44,7 @@
       <div class="top-bar">
         <span class="top-bar-title">BillSum - 多站点帐单统计</span>
         <span class="top-bar-right">
-          <el-dropdown trigger="click" @command="handleUserCommand">
+          <el-dropdown v-if="currentUser" trigger="click" @command="handleUserCommand">
             <el-tag size="small" :type="currentUser.role === 'super' ? 'danger' : 'info'" style="cursor:pointer">
               {{ currentUser.name || currentUser.username }}
               <el-icon style="margin-left:4px"><ArrowDown /></el-icon>
@@ -116,6 +116,8 @@ const currentRoute = computed(() => route.path)
 const isLoginPage = computed(() => route.path === '/login')
 
 const currentUser = computed(() => {
+  // route.path as dummy dep to force re-eval on navigation (localStorage not reactive)
+  void route.path
   try {
     return JSON.parse(localStorage.getItem('billsum_user'))
   } catch {
