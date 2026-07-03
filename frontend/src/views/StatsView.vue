@@ -439,6 +439,8 @@ async function doQuery() {
   }
 }
 
+const EXPORT_DIR_ID = 'stats-export-dir'
+
 async function doExport(format = 'xlsx') {
   if (!statsData.value.length) {
     ElMessage.warning('没有数据可导出')
@@ -465,22 +467,47 @@ async function doExport(format = 'xlsx') {
   }
 
   if (format === 'xlsx') {
-    exportLoading.value = true
     const fnSum = `${form.site}_${form.table_name}_sum.xlsx`
     const fnDetail = `${form.site}_${form.table_name}_明细.xlsx`
+    exportTimerText.value = ''
+
+    // 弹出文件夹选择框（选择前不计时）
+    let dirHandle
+    const supportsDir = typeof window.showDirectoryPicker === 'function'
+    if (supportsDir) {
+      try {
+        dirHandle = await window.showDirectoryPicker({ id: EXPORT_DIR_ID })
+      } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') return
+        ElMessage.error('选择文件夹失败: ' + e.message)
+        return
+      }
+    }
+
+    // 选择完成 → 开始计时并导出
+    exportLoading.value = true
+    const t0 = Date.now()
+    const _timer = setInterval(() => {
+      exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+    }, 100)
     try {
-      // 选择目录路径
-      let dirHandle
-      const supportsDir = typeof window.showDirectoryPicker === 'function'
-      if (supportsDir) {
-        dirHandle = await window.showDirectoryPicker()
+      if (dirHandle) {
+        // 已选文件夹 → 保存到文件
+        exportTimerText.value = `正在导出 ${fnSum} ...`
+        const r1 = await fetch('/api/stats/export', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        })
+        if (!r1.ok) throw new Error((await r1.json().catch(() => ({}))).detail || '导出失败')
+        const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
+        const w1 = await fh1.createWritable()
+        await w1.write(await r1.blob())
+        await w1.close()
+
+        if (showLogDetail.value) {
+          await _exportDetail(dirHandle, fnDetail, body)
+        }
       } else {
-        // 不支持目录选择器→ 直接下载
-        const t0 = Date.now()
-        exportTimerText.value = '导出中 0.0s'
-        const _timer = setInterval(() => {
-          exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
-        }, 100)
+        // 不支持文件夹选择器 → 直接下载
         const resp = await fetch('/api/stats/export', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         })
@@ -489,46 +516,21 @@ async function doExport(format = 'xlsx') {
         if (showLogDetail.value) {
           await _exportDetail(null, fnDetail, body)
         }
-        exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
-        clearInterval(_timer)
-        return
       }
-
-      // 选择目录完成 → 开始计时
-      const t0 = Date.now()
-      const _timer = setInterval(() => {
-        exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
-      }, 100)
-
-      // 1. 统计文件
-      exportTimerText.value = `正在导出 ${fnSum} ...`
-      const r1 = await fetch('/api/stats/export', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-      })
-      if (!r1.ok) throw new Error((await r1.json().catch(() => ({}))).detail || '导出失败')
-      const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
-      const w1 = await fh1.createWritable()
-      await w1.write(await r1.blob())
-      await w1.close()
-
-      // 2. 明细文件（可选）
-      if (showLogDetail.value) {
-        await _exportDetail(dirHandle, fnDetail, body)
-      }
-
       clearInterval(_timer)
       exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
-      ElMessage.success('全部导出完成')
+      if (dirHandle) ElMessage.success('全部导出完成')
     } catch (e) {
+      clearInterval(_timer)
       if (e instanceof DOMException && e.name === 'AbortError') return
       ElMessage.error('导出失败: ' + e.message)
     } finally {
       exportLoading.value = false
     }
   } else {
-    // CSV: client-side
+    // CSV: client-side — 直接下载（不弹文件夹）
+    exportTimerText.value = ''
     const t0 = Date.now()
-    exportTimerText.value = '导出中 0.0s'
     const _timer = setInterval(() => {
       exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
     }, 100)
@@ -545,8 +547,8 @@ async function doExport(format = 'xlsx') {
     )
     const csv = '﻿' + headers.join(',') + '\n' + rows.map(r => r.join(',')).join('\n')
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${form.table_name}_sum.csv`)
-    exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
     clearInterval(_timer)
+    exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
   }
 }
 
