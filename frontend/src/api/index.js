@@ -95,5 +95,7 @@ export default {
     logout: (data) => api.post('/system/logout', data),
     logAction: (data) => api.post('/system/log-action', data),
     getLogs: (params) => api.get('/system/logs', { params }),
+    clearLogs: () => api.delete('/system/logs'),
+    clearLogsBefore: (data) => api.post('/system/logs/clear-before', data),
   },
 }

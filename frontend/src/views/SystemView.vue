@@ -71,12 +71,28 @@
       <!-- ════════════ Tab 3: System Logs ════════════ -->
       <el-tab-pane label="系统日志" name="logs">
         <el-card shadow="never" :body-style="{ padding: '20px' }">
-          <div style="margin-bottom: 12px; display:flex; align-items:center; gap:12px;">
-            <el-button type="primary" @click="loadLogs(1)" :loading="logsLoading">刷新</el-button>
-            <span style="font-size:13px; color:#909399;">共 {{ logsTotal }} 条记录</span>
-          </div>
+          <!-- Search bar -->
+          <el-form :model="logSearch" inline style="margin-bottom:12px;">
+            <el-form-item label="时间范围">
+              <el-date-picker v-model="logSearch.dateRange" type="daterange"
+                range-separator="至" start-placeholder="开始日期" end-placeholder="结束日期"
+                value-format="YYYY-MM-DD" style="width:260px" />
+            </el-form-item>
+            <el-form-item label="内容">
+              <el-input v-model="logSearch.keyword" placeholder="用户名/模块/详情" clearable style="width:200px" @keyup.enter="loadLogs(1)" />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="loadLogs(1)" :loading="logsLoading">查询</el-button>
+              <el-button @click="resetLogSearch">重置</el-button>
+            </el-form-item>
+            <el-form-item style="margin-left:auto;">
+              <el-button type="danger" plain @click="clearLogsBefore">清除N日之前</el-button>
+              <el-button type="danger" @click="clearAllLogs">清空</el-button>
+            </el-form-item>
+          </el-form>
+
           <el-table :data="logs" border stripe style="width:100%">
-            <el-table-column label="时间" prop="created_at" width="170" />
+            <el-table-column label="时间" prop="created_at" width="175" />
             <el-table-column label="用户" prop="username" width="90" />
             <el-table-column label="操作" prop="action" width="80">
               <template #default="{ row }">
@@ -89,9 +105,14 @@
             <el-table-column label="功能模块" prop="module" width="120" />
             <el-table-column label="详情" prop="detail" min-width="300" show-overflow-tooltip />
           </el-table>
-          <div v-if="logsTotal > logs.length" style="text-align:center; margin-top:12px;">
-            <el-button link type="primary" @click="loadMoreLogs" :loading="logsLoading">加载更多</el-button>
-          </div>
+
+          <PaginationBar
+            :total="logsTotal"
+            :current-page="logsPage"
+            :page-size="logsPageSize"
+            @update:current-page="(p) => loadLogs(p)"
+            @update:page-size="(s) => { logsPageSize = s; loadLogs(1) }"
+          />
         </el-card>
       </el-tab-pane>
     </el-tabs>
@@ -139,6 +160,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import api from '../api'
+import PaginationBar from '../components/PaginationBar.vue'
 
 const PROTECTED = ['admin', 'query']
 function isProtected(name) { return PROTECTED.includes(name) }
@@ -307,31 +329,71 @@ async function doDelete(row) {
 const logs = ref([])
 const logsTotal = ref(0)
 const logsPage = ref(1)
+const logsPageSize = ref(50)
 const logsLoading = ref(false)
+const logSearch = reactive({
+  dateRange: [],
+  keyword: '',
+})
+
+function getDefaultDateRange() {
+  const now = new Date()
+  const start = new Date(now.getFullYear(), now.getMonth(), 1)
+  const fmt = (d) => {
+    const y = d.getFullYear()
+    const m = String(d.getMonth() + 1).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    return `${y}-${m}-${day}`
+  }
+  return [fmt(start), fmt(now)]
+}
 
 async function loadLogs(page = 1) {
   logsLoading.value = true
   logsPage.value = page
   try {
-    const { data } = await api.system.getLogs({ page, size: 50 })
-    if (page === 1) {
-      logs.value = data.logs || []
-    } else {
-      logs.value = logs.value.concat(data.logs || [])
+    const params = { page, size: logsPageSize.value }
+    if (logSearch.dateRange && logSearch.dateRange.length === 2) {
+      params.date_start = logSearch.dateRange[0]
+      params.date_end = logSearch.dateRange[1]
     }
+    if (logSearch.keyword) params.keyword = logSearch.keyword
+    const { data } = await api.system.getLogs(params)
+    logs.value = data.logs || []
     logsTotal.value = data.total || 0
   } finally {
     logsLoading.value = false
   }
 }
 
-function loadMoreLogs() {
-  loadLogs(logsPage.value + 1)
+function resetLogSearch() {
+  logSearch.dateRange = []
+  logSearch.keyword = ''
+  loadLogs(1)
+}
+
+async function clearAllLogs() {
+  await ElMessageBox.confirm('确认清空所有系统日志？此操作不可恢复。', '警告',
+    { confirmButtonText: '确认清空', cancelButtonText: '取消', type: 'warning' })
+  await api.system.clearLogs()
+  ElMessage.success('日志已清空')
+  loadLogs(1)
+}
+
+async function clearLogsBefore() {
+  const { value } = await ElMessageBox.prompt('清除多少天之前的日志？', '清除N日之前',
+    { inputPlaceholder: '输入天数', inputPattern: /^\d+$/, inputErrorMessage: '请输入正整数' })
+  const days = parseInt(value)
+  if (isNaN(days) || days < 1) return
+  await api.system.clearLogsBefore({ days })
+  ElMessage.success(`已清除${days}日之前的日志`)
+  loadLogs(1)
 }
 
 onMounted(() => {
   loadBinlog()
   loadUsers()
+  logSearch.dateRange = getDefaultDateRange()
   loadLogs()
 })
 </script>

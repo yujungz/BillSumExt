@@ -262,8 +262,10 @@ async def login(body: LoginRequest):
 
 
 @router.post("/logout")
-async def logout(body: LoginRequest = None):
-    username = body.username if body else "unknown"
+async def logout(body: dict = None):
+    username = "unknown"
+    if body and isinstance(body, dict):
+        username = body.get("username", "unknown")
     await add_log(username, "logout", "", "用户登出")
     return {"success": True}
 
@@ -313,14 +315,59 @@ async def log_action(body: LogActionRequest):
 
 
 @router.get("/logs")
-async def get_logs(page: int = 1, size: int = 50):
+async def get_logs(
+    page: int = 1, size: int = 50,
+    date_start: str = "", date_end: str = "",
+    keyword: str = "",
+):
     await _ensure_logs_table()
     offset = (page - 1) * size
+
+    conditions = []
+    params = []
+    if date_start:
+        conditions.append("CONVERT_TZ(created_at, '+00:00', '+08:00') >= %s")
+        params.append(date_start)
+    if date_end:
+        conditions.append("CONVERT_TZ(created_at, '+00:00', '+08:00') <= %s")
+        params.append(date_end + " 23:59:59")
+    if keyword:
+        conditions.append("(username LIKE %s OR module LIKE %s OR detail LIKE %s OR action LIKE %s)")
+        kw = f"%{keyword}%"
+        params.extend([kw, kw, kw, kw])
+
+    where = ""
+    if conditions:
+        where = "WHERE " + " AND ".join(conditions)
+
+    count_row = await db.fetch_one(f"SELECT COUNT(*) as cnt FROM {_LOG_TABLE} {where}", tuple(params) if params else None)
+    total = count_row["cnt"] if count_row else 0
+
     rows = await db.fetch_all(
-        f"SELECT id, username, action, module, detail, created_at "
-        f"FROM {_LOG_TABLE} ORDER BY id DESC LIMIT %s OFFSET %s",
-        (size, offset),
+        f"SELECT id, username, action, module, detail, "
+        f"CONVERT_TZ(created_at, '+00:00', '+08:00') as created_at "
+        f"FROM {_LOG_TABLE} {where} ORDER BY id DESC LIMIT %s OFFSET %s",
+        tuple(params) + (size, offset) if params else (size, offset),
     )
-    total_row = await db.fetch_one(f"SELECT COUNT(*) as cnt FROM {_LOG_TABLE}")
-    total = total_row["cnt"] if total_row else 0
     return {"logs": rows, "total": total, "page": page, "size": size}
+
+
+class LogsClearBefore(BaseModel):
+    days: int
+
+
+@router.delete("/logs")
+async def clear_all_logs():
+    await _ensure_logs_table()
+    await db.execute(f"DELETE FROM {_LOG_TABLE}")
+    return {"success": True}
+
+
+@router.post("/logs/clear-before")
+async def clear_logs_before(body: LogsClearBefore):
+    await _ensure_logs_table()
+    await db.execute(
+        f"DELETE FROM {_LOG_TABLE} WHERE created_at < NOW() - INTERVAL %s DAY",
+        (body.days,),
+    )
+    return {"success": True}
