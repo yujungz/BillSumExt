@@ -126,6 +126,16 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class UserCreate(BaseModel):
+    username: str
+    password: str
+    role: str = "normal"
+    status: str = "enabled"
+    name: str = ""
+    contact: str = ""
+    notes: str = ""
+
+
 @router.get("/users")
 async def list_users():
     await _ensure_users_table()
@@ -135,12 +145,53 @@ async def list_users():
     return {"users": rows}
 
 
+@router.post("/users")
+async def create_user(body: UserCreate):
+    await _ensure_users_table()
+    if body.username in PROTECTED_USERS:
+        raise HTTPException(400, detail=f"用户名 '{body.username}' 为系统保留")
+    if not body.username or len(body.username) < 2:
+        raise HTTPException(400, detail="用户名至少2位")
+    if not body.password or len(body.password) < 4:
+        raise HTTPException(400, detail="密码至少4位")
+    if body.role not in ("super", "normal"):
+        raise HTTPException(400, detail="角色无效")
+    existing = await db.fetch_one(
+        f"SELECT id FROM {_USERS_TABLE} WHERE username=%s", (body.username,)
+    )
+    if existing:
+        raise HTTPException(400, detail=f"用户名 '{body.username}' 已存在")
+    await db.execute(
+        f"INSERT INTO {_USERS_TABLE} (username, password, role, status, name, contact, notes) "
+        f"VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (body.username, body.password, body.role, body.status, body.name, body.contact, body.notes),
+    )
+    return {"success": True}
+
+
+@router.delete("/users/{username}")
+async def delete_user(username: str):
+    if username in PROTECTED_USERS:
+        raise HTTPException(400, detail=f"用户 '{username}' 为系统保留，不可删除")
+    row = await db.fetch_one(
+        f"SELECT id FROM {_USERS_TABLE} WHERE username=%s", (username,)
+    )
+    if not row:
+        raise HTTPException(404, detail="用户不存在")
+    await db.execute(f"DELETE FROM {_USERS_TABLE} WHERE username=%s", (username,))
+    return {"success": True}
+
+
 @router.put("/users/{username}/password")
 async def update_password(username: str, body: UserPassword):
-    if username not in PROTECTED_USERS:
-        raise HTTPException(400, detail="仅支持修改 admin 和 query 的密码")
+    await _ensure_users_table()
     if not body.password or len(body.password) < 4:
         raise HTTPException(400, detail="密码长度至少4位")
+    row = await db.fetch_one(
+        f"SELECT id FROM {_USERS_TABLE} WHERE username=%s", (username,)
+    )
+    if not row:
+        raise HTTPException(404, detail="用户不存在")
     await db.execute(
         f"UPDATE {_USERS_TABLE} SET password=%s WHERE username=%s",
         (body.password, username),
@@ -164,11 +215,29 @@ async def update_status(username: str, body: UserStatus):
 
 @router.put("/users/{username}/profile")
 async def update_profile(username: str, body: UserProfile):
-    if username not in PROTECTED_USERS:
-        raise HTTPException(400, detail="仅支持修改 admin 和 query 的资料")
     await db.execute(
         f"UPDATE {_USERS_TABLE} SET name=%s, contact=%s, notes=%s WHERE username=%s",
         (body.name, body.contact, body.notes, username),
+    )
+    return {"success": True}
+
+
+@router.put("/users/me/profile")
+async def update_my_profile(body: UserProfile, username: str = Query(...)):
+    await db.execute(
+        f"UPDATE {_USERS_TABLE} SET name=%s, contact=%s, notes=%s WHERE username=%s",
+        (body.name, body.contact, body.notes, username),
+    )
+    return {"success": True}
+
+
+@router.put("/users/me/password")
+async def update_my_password(body: UserPassword, username: str = Query(...)):
+    if not body.password or len(body.password) < 4:
+        raise HTTPException(400, detail="密码长度至少4位")
+    await db.execute(
+        f"UPDATE {_USERS_TABLE} SET password=%s WHERE username=%s",
+        (body.password, username),
     )
     return {"success": True}
 
@@ -178,11 +247,14 @@ async def login(body: LoginRequest):
     """Simple login — verify username/password, return user info."""
     await _ensure_users_table()
     row = await db.fetch_one(
-        f"SELECT username, role, status, name FROM {_USERS_TABLE} WHERE username=%s AND password=%s",
+        f"SELECT username, role, status, name, contact, notes FROM {_USERS_TABLE} WHERE username=%s AND password=%s",
         (body.username, body.password),
     )
     if not row:
         raise HTTPException(401, detail="用户名或密码错误")
     if row["status"] != "enabled":
         raise HTTPException(403, detail="该用户已被禁用")
-    return {"user": {"username": row["username"], "role": row["role"], "name": row["name"]}}
+    return {"user": {
+        "username": row["username"], "role": row["role"], "name": row["name"] or "",
+        "contact": row["contact"] or "", "notes": row["notes"] or "",
+    }}
