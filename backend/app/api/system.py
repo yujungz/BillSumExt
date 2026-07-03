@@ -1,16 +1,19 @@
-"""System API - binlog management and SQL execution."""
+"""System API - binlog management, user management, and SQL execution."""
 
 import os
 import subprocess
 import tempfile
+import logging
 
 from fastapi import APIRouter, Query, UploadFile, File, HTTPException
 from pydantic import BaseModel
 from app import database as db
 from app.config import AppConfig
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/system", tags=["system"])
 
+# ── Binlog Management ────────────────────────────────────────────────
 
 @router.get("/binlog")
 async def get_binlog_info():
@@ -19,7 +22,7 @@ async def get_binlog_info():
 
 
 class PurgeRequest(BaseModel):
-    before: str = ""  # binlog name to purge up to
+    before: str = ""
 
 
 @router.post("/binlog/purge")
@@ -59,3 +62,127 @@ async def execute_sql(site: str = Query(...), file: UploadFile = File(...)):
         os.unlink(tmp_path)
 
     return {"success": True, "message": f"SQL文件已执行到数据库 {db_name}"}
+
+
+# ── User Management ──────────────────────────────────────────────────
+
+_USERS_TABLE = "sum_all.system_users"
+
+DEFAULT_USERS = [
+    {"username": "admin", "password": "Bill1@3", "role": "super", "status": "enabled",
+     "name": "超级管理员", "contact": "", "notes": "超级管理员，拥有所有权限"},
+    {"username": "query", "password": "Fin12#", "role": "normal", "status": "enabled",
+     "name": "查询用户", "contact": "", "notes": "普通用户，仅可查询"},
+]
+
+PROTECTED_USERS = {"admin", "query"}
+
+
+async def _ensure_users_table():
+    """Create the system_users table and seed default users on first access."""
+    await db.execute(f"""
+        CREATE TABLE IF NOT EXISTS {_USERS_TABLE} (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(80) NOT NULL UNIQUE,
+            password VARCHAR(255) NOT NULL,
+            role VARCHAR(20) NOT NULL DEFAULT 'normal',
+            status VARCHAR(20) NOT NULL DEFAULT 'enabled',
+            name VARCHAR(80) DEFAULT '',
+            contact VARCHAR(200) DEFAULT '',
+            notes VARCHAR(500) DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+    for u in DEFAULT_USERS:
+        row = await db.fetch_one(
+            f"SELECT id FROM {_USERS_TABLE} WHERE username=%s", (u["username"],)
+        )
+        if not row:
+            await db.execute(
+                f"INSERT INTO {_USERS_TABLE} (username, password, role, status, name, contact, notes) "
+                f"VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (u["username"], u["password"], u["role"], u["status"], u["name"], u["contact"], u["notes"]),
+            )
+            log.info("Default user '%s' created", u["username"])
+
+
+class UserProfile(BaseModel):
+    name: str = ""
+    contact: str = ""
+    notes: str = ""
+
+
+class UserPassword(BaseModel):
+    password: str
+
+
+class UserStatus(BaseModel):
+    status: str  # "enabled" or "disabled"
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@router.get("/users")
+async def list_users():
+    await _ensure_users_table()
+    rows = await db.fetch_all(
+        f"SELECT username, role, status, name, contact, notes FROM {_USERS_TABLE} ORDER BY id"
+    )
+    return {"users": rows}
+
+
+@router.put("/users/{username}/password")
+async def update_password(username: str, body: UserPassword):
+    if username not in PROTECTED_USERS:
+        raise HTTPException(400, detail="仅支持修改 admin 和 query 的密码")
+    if not body.password or len(body.password) < 4:
+        raise HTTPException(400, detail="密码长度至少4位")
+    await db.execute(
+        f"UPDATE {_USERS_TABLE} SET password=%s WHERE username=%s",
+        (body.password, username),
+    )
+    return {"success": True}
+
+
+@router.put("/users/{username}/status")
+async def update_status(username: str, body: UserStatus):
+    if username in PROTECTED_USERS:
+        if body.status != "enabled":
+            raise HTTPException(400, detail=f"用户 '{username}' 不可禁用")
+    if body.status not in ("enabled", "disabled"):
+        raise HTTPException(400, detail="状态值无效")
+    await db.execute(
+        f"UPDATE {_USERS_TABLE} SET status=%s WHERE username=%s",
+        (body.status, username),
+    )
+    return {"success": True}
+
+
+@router.put("/users/{username}/profile")
+async def update_profile(username: str, body: UserProfile):
+    if username not in PROTECTED_USERS:
+        raise HTTPException(400, detail="仅支持修改 admin 和 query 的资料")
+    await db.execute(
+        f"UPDATE {_USERS_TABLE} SET name=%s, contact=%s, notes=%s WHERE username=%s",
+        (body.name, body.contact, body.notes, username),
+    )
+    return {"success": True}
+
+
+@router.post("/login")
+async def login(body: LoginRequest):
+    """Simple login — verify username/password, return user info."""
+    await _ensure_users_table()
+    row = await db.fetch_one(
+        f"SELECT username, role, status, name FROM {_USERS_TABLE} WHERE username=%s AND password=%s",
+        (body.username, body.password),
+    )
+    if not row:
+        raise HTTPException(401, detail="用户名或密码错误")
+    if row["status"] != "enabled":
+        raise HTTPException(403, detail="该用户已被禁用")
+    return {"user": {"username": row["username"], "role": row["role"], "name": row["name"]}}

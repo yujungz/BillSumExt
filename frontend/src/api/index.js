@@ -83,5 +83,10 @@ export default {
     binlog: () => api.get('/system/binlog'),
     purge: (data) => api.post('/system/binlog/purge', data),
     executeSql: (site, formData) => api.post('/system/execute-sql', formData, { params: { site }, headers: { 'Content-Type': 'multipart/form-data' } }),
+    users: () => api.get('/system/users'),
+    updatePassword: (username, data) => api.put(`/system/users/${username}/password`, data),
+    updateStatus: (username, data) => api.put(`/system/users/${username}/status`, data),
+    updateProfile: (username, data) => api.put(`/system/users/${username}/profile`, data),
+    login: (data) => api.post('/system/login', data),
   },
 }
