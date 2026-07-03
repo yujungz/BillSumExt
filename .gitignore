@@ -11,3 +11,4 @@ backend/**/__pycache__/
 /data/
 frontend/dist/
 memory/
+mysql-init/

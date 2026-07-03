@@ -6,21 +6,6 @@ if [ -f /app/data/config.json ]; then
     sed -i 's/"container_name": "test-mysql8"/"container_name": "BillSumExt-mysql"/g' /app/data/config.json
 fi
 
-# Wait for MySQL to be fully ready (ping is not enough — it succeeds before init scripts complete)
-echo "Waiting for MySQL at $MYSQL_HOST:$MYSQL_PORT..."
-for i in $(seq 1 120); do
-    if mysql -h"$MYSQL_HOST" -P"$MYSQL_PORT" -u"$MYSQL_USER" -p"$MYSQL_PASSWORD" -e "SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME='sum_all'" --silent 2>/dev/null | grep -q '[0-9]'; then
-        echo "MySQL is ready (sum_all database found)."
-        break
-    fi
-    if [ "$i" -eq 120 ]; then
-        echo "WARNING: MySQL not ready after 120 retries, continuing anyway..."
-    else
-        echo "Waiting... ($i/120)"
-        sleep 2
-    fi
-done
-
 # Generate self-signed SSL cert and config if missing
 SSL_DIR=/etc/nginx/ssl
 SSL_CONF=/etc/nginx/conf.d/ssl.conf

@@ -4,8 +4,10 @@ echo 开始初始化...
 
 set PRM_DKNAME=BillSumExt-mysql
 set PRM_DBPWD=Bill1@3
-set PRM_DBNAME=ai
+set PRM_DBNAME=all
 docker exec -i %PRM_DKNAME% mysql --default-character-set=utf8mb4 -uroot -p%PRM_DBPWD% mysql < ./createdb.sql
+docker exec -i %PRM_DKNAME% mysql --default-character-set=utf8mb4 -uroot -p%PRM_DBPWD% sum_%PRM_DBNAME% < ./sum_all.sql
+set PRM_DBNAME=ai
 docker exec -i %PRM_DKNAME% mysql --default-character-set=utf8mb4 -uroot -p%PRM_DBPWD% sum_%PRM_DBNAME% < ./%PRM_DBNAME%_ex_channels.sql
 docker exec -i %PRM_DKNAME% mysql --default-character-set=utf8mb4 -uroot -p%PRM_DBPWD% sum_%PRM_DBNAME% < ./%PRM_DBNAME%_ex_tokens.sql
 docker exec -i %PRM_DKNAME% mysql --default-character-set=utf8mb4 -uroot -p%PRM_DBPWD% sum_%PRM_DBNAME% < ./%PRM_DBNAME%_ex_users.sql
