@@ -1,8 +1,9 @@
 #!/bin/bash
-# BillSumExt — 宿主机 Nginx 反向代理 + Let's Encrypt SSL 一键配置脚本
+# BillSumExt — 宿主机 Nginx 反向代理（端口 80/443）← 容器（端口 8091）
 # 在远程服务器上以 root 运行： bash setup-ssl.sh
 #
-# 完成后访问：https://shadow.burncloud.com（正式证书，地址栏显示锁🔒）
+# 完成后：https://shadow.burncloud.com（正式证书🔒）
+#          备用 http://shadow.burncloud.com:8091（原方式）
 
 set -e
 
@@ -14,58 +15,73 @@ echo " BillSumExt — SSL 反向代理配置"
 echo "============================================"
 echo ""
 
-# ── 1. 检查 Docker 容器是否在运行 ──
+# ── 1. 检查容器 ──
 if ! docker ps --format '{{.Names}}' | grep -q 'BillSumExt-app'; then
-  echo "❌ BillSumExt-app 容器未运行，请先执行 docker-compose up -d --build"
+  echo "❌ BillSumExt-app 容器未运行"
   exit 1
 fi
-echo "✅ BillSumExt-app 容器运行中"
+echo "✅ BillSumExt-app 运行中（端口 8091）"
 
-# ── 2. 安装 Nginx（如未安装） ──
+# ── 2. 安装 Nginx + certbot ──
 if ! command -v nginx &>/dev/null; then
-  echo "📦 安装 Nginx..."
   apt-get update && apt-get install -y nginx
 fi
-echo "✅ Nginx 已安装"
-
-# ── 3. 安装 certbot ──
 if ! command -v certbot &>/dev/null; then
-  echo "📦 安装 certbot..."
   apt-get install -y certbot python3-certbot-nginx
 fi
-echo "✅ certbot 已安装"
+echo "✅ Nginx + certbot 已安装"
 
-# ── 4. 停止容器内的 Nginx（释放 80 端口给 certbot） ──
-echo "⏸️ 暂停容器内的 Nginx（释放端口）..."
-docker exec BillSumExt-app nginx -s stop 2>/dev/null || true
+# ── 3. 重要：不要动容器内的 Nginx（容器 80 ↔ 宿主机 8091，无冲突） ──
+echo "→ 容器内 Nginx 保持不变（端口 8091 服务正常）"
 
-# ── 5. 创建临时 Nginx 配置用于证书验证 ──
-cat > /etc/nginx/sites-available/billsumext-http << 'EOF'
+# ── 4. 配置宿主机 Nginx 作为反向代理（端口 80/443 → 127.0.0.1:8091） ──
+cat > /etc/nginx/sites-available/billsumext << 'EOF'
 server {
     listen 80;
     server_name shadow.burncloud.com;
-    root /var/www/html;
+    location / {
+        proxy_pass http://127.0.0.1:8091;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 7200s;
+    }
 }
 EOF
-ln -sf /etc/nginx/sites-available/billsumext-http /etc/nginx/sites-enabled/
 rm -f /etc/nginx/sites-enabled/default
-nginx -t && systemctl reload nginx || nginx
+ln -sf /etc/nginx/sites-available/billsumext /etc/nginx/sites-enabled/
+nginx -t && systemctl enable nginx && systemctl restart nginx
+echo "✅ 宿主机 Nginx 已启动（端口 80 → 127.0.0.1:8091）"
 
-# ── 6. 申请 Let's Encrypt 证书 ──
-echo "🔐 申请 Let's Encrypt 证书..."
-certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive --redirect 2>&1 || {
-  echo "⚠️ certbot nginx 模式失败，尝试 standalone 模式..."
-  systemctl stop nginx
-  certbot certonly --standalone -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive 2>&1
-  systemctl start nginx
-}
+# 验证
+sleep 2
+HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1 2>/dev/null || echo "000")
+if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "302" ] || [ "$HTTP_CODE" = "301" ]; then
+  echo "✅ http://$DOMAIN 代理正常"
+else
+  echo "⚠️ http://$DOMAIN 返回 $HTTP_CODE，可能还需调试"
+fi
 
-# ── 7. 如果证书申请成功 ──
-if [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
+# ── 5. 申请 Let's Encrypt 证书（需要 80 端口外网可访问） ──
+echo ""
+echo "🔐 正在申请 Let's Encrypt 证书..."
+echo "（请确保 $DOMAIN 已解析到本机，且 80 端口已开放）"
+echo ""
+
+set +e
+certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive 2>&1
+CERTBOT_EXIT=$?
+set -e
+
+if [ $CERTBOT_EXIT -eq 0 ] && [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
   echo "✅ 证书获取成功！"
 
-  # 创建正式的反向代理配置
-  cat > /etc/nginx/sites-available/billsumext << 'EOF'
+  # certbot --nginx 已自动修改了配置，写入 HTTPS server block
+  # 我们只需检查并确认配置正确
+  if ! grep -q "listen 443 ssl" /etc/nginx/sites-available/billsumext; then
+    # 如果 certbot 没有自动添加（有时 --nginx 模式会创建单独文件）
+    cat > /etc/nginx/sites-available/billsumext << 'EOF'
 server {
     listen 80;
     server_name shadow.burncloud.com;
@@ -93,27 +109,29 @@ server {
     }
 }
 EOF
+  fi
 
-  rm -f /etc/nginx/sites-enabled/billsumext-http
-  ln -sf /etc/nginx/sites-available/billsumext /etc/nginx/sites-enabled/
   nginx -t && systemctl reload nginx
   echo ""
   echo "============================================"
-  echo " 🎉 配置完成！"
+  echo " 🎉 全部完成！"
   echo ""
-  echo " 访问地址：https://shadow.burncloud.com"
-  echo " （地址栏显示锁🔒，正式证书）"
-  echo ""
-  echo " 原来的 http://localhost:8091 仍可访问"
-  echo "============================================"
+  echo " 正式访问（推荐）：https://${DOMAIN} 🔒"
+  echo " 备用访问：         http://${DOMAIN}:8091"
+  echo " 手工续期：certbot renew --nginx"
 else
-  echo "❌ 证书获取失败"
-  echo "请检查域名 shadow.burncloud.com 是否解析到本服务器 IP"
+  echo ""
+  echo "============================================"
+  echo " ⚠️ 证书获取失败（exit code: $CERTBOT_EXIT）"
+  echo ""
+  echo " 常见原因："
+  echo "  1. 域名 $DOMAIN 未解析到本机 IP"
+  echo "  2. 服务器 80 端口未开放（防火墙/安全组）"
+  echo "  3. 证书申请频率超限"
+  echo ""
+  echo " HTTP 反向代理仍正常工作："
+  echo "  → http://${DOMAIN}（自动跳转到 127.0.0.1:8091）"
+  echo ""
+  echo " 修复后重新运行：bash setup-ssl.sh"
+  echo "============================================"
 fi
-
-# ── 8. 恢复容器内的 Nginx ──
-docker exec BillSumExt-app nginx 2>/dev/null || true
-
-# ── 9. 配置自动续期 ──
-echo "0 3 * * * root certbot renew --quiet && systemctl reload nginx" > /etc/cron.d/certbot-renew
-echo "✅ 自动续期已配置（每天凌晨 3 点检查）"
