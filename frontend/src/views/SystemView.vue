@@ -75,8 +75,8 @@
         <el-form-item label="用户名" prop="username">
           <el-input v-model="userForm.username" :disabled="isEditing" placeholder="用户名" />
         </el-form-item>
-        <el-form-item label="密码" :prop="isEditing ? undefined : 'password'">
-          <el-input v-model="userForm.password" type="password" show-password :placeholder="isEditing ? '留空则不修改' : '密码'" />
+        <el-form-item label="密码">
+          <el-input v-model="userForm.password" type="password" show-password :placeholder="isEditing ? '留空则不修改' : '密码（必填）'" />
         </el-form-item>
         <el-form-item label="权限" prop="role">
           <el-radio-group v-model="userForm.role">
@@ -191,10 +191,6 @@ const userRules = {
     { required: true, message: '请输入用户名', trigger: 'blur' },
     { min: 2, message: '用户名至少2位', trigger: 'blur' },
   ],
-  password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 4, message: '密码至少4位', trigger: 'blur' },
-  ],
   role: [{ required: true, message: '请选择权限', trigger: 'change' }],
   status: [{ required: true, message: '请选择状态', trigger: 'change' }],
 }
@@ -231,6 +227,12 @@ function openEditDialog(row) {
 async function saveUser() {
   const valid = await userFormRef.value.validate().catch(() => false)
   if (!valid) return
+  // Manual password check (add mode: required; edit mode: optional)
+  if (!isEditing.value && (!userForm.password || userForm.password.length < 4)) {
+    ElMessage.warning('新增用户密码至少4位')
+    userSaving.value = false
+    return
+  }
   userSaving.value = true
   try {
     if (isEditing.value) {
