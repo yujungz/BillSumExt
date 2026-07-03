@@ -86,8 +86,9 @@
               <el-button @click="resetLogSearch">重置</el-button>
             </el-form-item>
             <el-form-item style="margin-left:auto;">
-              <el-button type="danger" plain @click="clearLogsBefore">清除N日之前</el-button>
-              <el-button type="danger" @click="clearAllLogs">清空</el-button>
+              <el-input-number v-model="clearDays" :min="1" :max="365" size="small" style="width:80px" />
+              <el-button type="danger" plain size="small" @click="clearLogsBefore">清除</el-button>
+              <el-button type="danger" size="small" @click="clearAllLogs">清空</el-button>
             </el-form-item>
           </el-form>
 
@@ -331,6 +332,7 @@ const logsTotal = ref(0)
 const logsPage = ref(1)
 const logsPageSize = ref(50)
 const logsLoading = ref(false)
+const clearDays = ref(30)
 const logSearch = reactive({
   dateRange: [],
   keyword: '',
@@ -381,12 +383,10 @@ async function clearAllLogs() {
 }
 
 async function clearLogsBefore() {
-  const { value } = await ElMessageBox.prompt('清除多少天之前的日志？', '清除N日之前',
-    { inputPlaceholder: '输入天数', inputPattern: /^\d+$/, inputErrorMessage: '请输入正整数' })
-  const days = parseInt(value)
-  if (isNaN(days) || days < 1) return
-  await api.system.clearLogsBefore({ days })
-  ElMessage.success(`已清除${days}日之前的日志`)
+  await ElMessageBox.confirm(`确认清除${clearDays.value}日之前的日志？`, '确认',
+    { confirmButtonText: '确认清除', cancelButtonText: '取消', type: 'warning' })
+  await api.system.clearLogsBefore({ days: clearDays.value })
+  ElMessage.success(`已清除${clearDays.value}日之前的日志`)
   loadLogs(1)
 }
 
