@@ -67,6 +67,33 @@
           </el-alert>
         </el-card>
       </el-tab-pane>
+
+      <!-- ════════════ Tab 3: System Logs ════════════ -->
+      <el-tab-pane label="系统日志" name="logs">
+        <el-card shadow="never" :body-style="{ padding: '20px' }">
+          <div style="margin-bottom: 12px; display:flex; align-items:center; gap:12px;">
+            <el-button type="primary" @click="loadLogs(1)" :loading="logsLoading">刷新</el-button>
+            <span style="font-size:13px; color:#909399;">共 {{ logsTotal }} 条记录</span>
+          </div>
+          <el-table :data="logs" border stripe style="width:100%">
+            <el-table-column label="时间" prop="created_at" width="170" />
+            <el-table-column label="用户" prop="username" width="90" />
+            <el-table-column label="操作" prop="action" width="80">
+              <template #default="{ row }">
+                <el-tag v-if="row.action === 'login'" size="small" type="success">登录</el-tag>
+                <el-tag v-else-if="row.action === 'logout'" size="small" type="info">登出</el-tag>
+                <el-tag v-else-if="row.action === 'export'" size="small" type="warning">导出</el-tag>
+                <el-tag v-else size="small">{{ row.action }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="功能模块" prop="module" width="120" />
+            <el-table-column label="详情" prop="detail" min-width="300" show-overflow-tooltip />
+          </el-table>
+          <div v-if="logsTotal > logs.length" style="text-align:center; margin-top:12px;">
+            <el-button link type="primary" @click="loadMoreLogs" :loading="logsLoading">加载更多</el-button>
+          </div>
+        </el-card>
+      </el-tab-pane>
     </el-tabs>
 
     <!-- ══ Add/Edit User Dialog ══ -->
@@ -276,9 +303,36 @@ async function doDelete(row) {
   }
 }
 
+// ── System Logs ──
+const logs = ref([])
+const logsTotal = ref(0)
+const logsPage = ref(1)
+const logsLoading = ref(false)
+
+async function loadLogs(page = 1) {
+  logsLoading.value = true
+  logsPage.value = page
+  try {
+    const { data } = await api.system.getLogs({ page, size: 50 })
+    if (page === 1) {
+      logs.value = data.logs || []
+    } else {
+      logs.value = logs.value.concat(data.logs || [])
+    }
+    logsTotal.value = data.total || 0
+  } finally {
+    logsLoading.value = false
+  }
+}
+
+function loadMoreLogs() {
+  loadLogs(logsPage.value + 1)
+}
+
 onMounted(() => {
   loadBinlog()
   loadUsers()
+  loadLogs()
 })
 </script>
 

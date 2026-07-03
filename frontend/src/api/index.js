@@ -92,5 +92,8 @@ export default {
     updateMyPassword: (username, data) => api.put(`/system/users/me/password?username=${username}`, data),
     updateMyProfile: (username, data) => api.put(`/system/users/me/profile?username=${username}`, data),
     login: (data) => api.post('/system/login', data),
+    logout: (data) => api.post('/system/logout', data),
+    logAction: (data) => api.post('/system/log-action', data),
+    getLogs: (params) => api.get('/system/logs', { params }),
   },
 }

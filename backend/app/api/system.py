@@ -1,11 +1,11 @@
-"""System API - binlog management, user management, and SQL execution."""
+"""System API - binlog management, user management, system logs, and SQL execution."""
 
 import os
 import subprocess
 import tempfile
 import logging
 
-from fastapi import APIRouter, Query, UploadFile, File, HTTPException
+from fastapi import APIRouter, Query, UploadFile, File, HTTPException, Request
 from pydantic import BaseModel
 from app import database as db
 from app.config import AppConfig
@@ -254,7 +254,73 @@ async def login(body: LoginRequest):
         raise HTTPException(401, detail="用户名或密码错误")
     if row["status"] != "enabled":
         raise HTTPException(403, detail="该用户已被禁用")
+    await add_log(body.username, "login", "", "用户登录")
     return {"user": {
         "username": row["username"], "role": row["role"], "name": row["name"] or "",
         "contact": row["contact"] or "", "notes": row["notes"] or "",
     }}
+
+
+@router.post("/logout")
+async def logout(body: LoginRequest = None):
+    username = body.username if body else "unknown"
+    await add_log(username, "logout", "", "用户登出")
+    return {"success": True}
+
+
+# ── System Logs ──────────────────────────────────────────────────────
+
+_LOG_TABLE = "sum_all.system_logs"
+
+
+async def _ensure_logs_table():
+    await db.execute(f"""
+        CREATE TABLE IF NOT EXISTS {_LOG_TABLE} (
+            id BIGINT AUTO_INCREMENT PRIMARY KEY,
+            username VARCHAR(80) NOT NULL,
+            action VARCHAR(50) NOT NULL,
+            module VARCHAR(100) DEFAULT '',
+            detail VARCHAR(1000) DEFAULT '',
+            ip VARCHAR(50) DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+
+
+async def add_log(username: str, action: str, module: str = "", detail: str = ""):
+    """Write a system log entry. Safe to call before table exists (will create it)."""
+    try:
+        await _ensure_logs_table()
+        await db.execute(
+            f"INSERT INTO {_LOG_TABLE} (username, action, module, detail) VALUES (%s, %s, %s, %s)",
+            (username, action, module, detail),
+        )
+    except Exception as e:
+        log.warning("Failed to write system log: %s", e)
+
+
+class LogActionRequest(BaseModel):
+    username: str
+    action: str        # 'export'
+    module: str        # e.g. '数据统计', '财务报表', '日志查询'
+    detail: str = ""   # free-text params description
+
+
+@router.post("/log-action")
+async def log_action(body: LogActionRequest):
+    await add_log(body.username, body.action, body.module, body.detail)
+    return {"success": True}
+
+
+@router.get("/logs")
+async def get_logs(page: int = 1, size: int = 50):
+    await _ensure_logs_table()
+    offset = (page - 1) * size
+    rows = await db.fetch_all(
+        f"SELECT id, username, action, module, detail, created_at "
+        f"FROM {_LOG_TABLE} ORDER BY id DESC LIMIT %s OFFSET %s",
+        (size, offset),
+    )
+    total_row = await db.fetch_one(f"SELECT COUNT(*) as cnt FROM {_LOG_TABLE}")
+    total = total_row["cnt"] if total_row else 0
+    return {"logs": rows, "total": total, "page": page, "size": size}

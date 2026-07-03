@@ -460,11 +460,19 @@ async function exportConfirm(format) {
       window.open(url)
     }
     stopTimer(t0, timer)
+    _logExport(`站点=${site.value} 表=${selectedTable.value} 格式=${format} 筛选: ${JSON.stringify(buildFilters()) || '无'}`)
   } catch (e) {
     stopTimer(t0, timer)
     if (e instanceof DOMException && e.name === 'AbortError') return
     ElMessage.error('导出失败: ' + e.message)
   }
+}
+
+function _logExport(detail) {
+  try {
+    const user = JSON.parse(localStorage.getItem('billsum_user'))
+    if (user) api.system.logAction({ username: user.username, action: 'export', module: '日志查询', detail })
+  } catch { /* ignore */ }
 }
 
 function getColumnWidth(col) {

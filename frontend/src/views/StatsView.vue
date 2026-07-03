@@ -519,7 +519,10 @@ async function doExport(format = 'xlsx') {
       }
       clearInterval(_timer)
       exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
-      if (dirHandle) ElMessage.success('全部导出完成')
+      if (dirHandle) {
+        ElMessage.success('全部导出完成')
+      }
+      _logExport(`站点=${form.site} 表=${form.table_name} 粒度=${form.group_by.join(',')} 日期=${form.date_start}~${form.date_end}`)
     } catch (e) {
       clearInterval(_timer)
       if (e instanceof DOMException && e.name === 'AbortError') return
@@ -549,6 +552,7 @@ async function doExport(format = 'xlsx') {
     downloadBlob(new Blob([csv], { type: 'text/csv;charset=utf-8' }), `${form.table_name}_sum.csv`)
     clearInterval(_timer)
     exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+    _logExport(`站点=${form.site} 表=${form.table_name} 粒度=${form.group_by.join(',')} 日期=${form.date_start}~${form.date_end} CSV`)
   }
 }
 
@@ -592,6 +596,16 @@ function downloadBlob(blob, filename) {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+// ── Export logging ──
+function _logExport(detail) {
+  try {
+    const user = JSON.parse(localStorage.getItem('billsum_user'))
+    if (user) {
+      api.system.logAction({ username: user.username, action: 'export', module: '数据统计', detail })
+    }
+  } catch { /* ignore */ }
 }
 </script>
 

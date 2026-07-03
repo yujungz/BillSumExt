@@ -150,6 +150,8 @@ function handleUserCommand(cmd) {
 }
 
 function doLogout() {
+  const user = currentUser.value
+  api.system.logout({ username: user?.username || '' }).catch(() => {})
   localStorage.removeItem('billsum_user')
   ElMessage.info('已退出')
   router.replace('/login')

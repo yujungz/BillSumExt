@@ -770,9 +770,11 @@ async function _doSingleExport(saveHandle, fileName) {
     await writable.write(blob)
     await writable.close()
     ElMessage.success(`已保存到 ${saveHandle.name}`)
+    _logExport('财务报表-用户统计', fileName)
   } else {
     downloadBlob(blob, fileName)
     ElMessage.success('导出完成')
+    _logExport('财务报表-用户统计', fileName)
   }
 }
 
@@ -848,6 +850,7 @@ async function _doBatchExport() {
       ElMessage.error('所有文件导出失败')
     } else {
       ElMessage.success(`已导出 ${users.length - failed}/${users.length} 个文件到 ${subDirName}`)
+      _logExport('财务报表-用户统计(批量)', `站点=${userStatsForm.site} 共${users.length}个用户`)
     }
     batchExport.value = false
   } finally {
@@ -998,6 +1001,7 @@ async function doSrGenerate() {
     await extractZipToDir(data, dirHandle)
     await _saveDirHandle(dirHandle)
     ElMessage.success('报表已导出到所选文件夹')
+    _logExport('财务报表-站点报告', `站点=${srForm.site} 表=${srForm.table} 日期=${srForm.dateStart}~${srForm.dateEnd}`)
   } catch (e) {
     const msg = e.response?.data?.detail || e.message
     ElMessage.error(typeof msg === 'string' ? msg : '导出失败')
@@ -1093,6 +1097,7 @@ async function exportViaFetch(url, fileName) {
     await writable.write(blob)
     await writable.close()
     ElMessage.success(`已保存到 ${handle.name}`)
+    _logExport('财务报表', fileName)
   } else {
     const resp = await fetch(url)
     if (!resp.ok) {
@@ -1102,6 +1107,7 @@ async function exportViaFetch(url, fileName) {
     const blob = await resp.blob()
     downloadBlob(blob, fileName)
     ElMessage.success('导出完成')
+    _logExport('财务报表', fileName)
   }
 }
 
@@ -1112,6 +1118,13 @@ function downloadBlob(blob, filename) {
   a.download = filename
   a.click()
   URL.revokeObjectURL(url)
+}
+
+function _logExport(moduleName, detail) {
+  try {
+    const user = JSON.parse(localStorage.getItem('billsum_user'))
+    if (user) api.system.logAction({ username: user.username, action: 'export', module: moduleName, detail })
+  } catch { /* ignore */ }
 }
 </script>
 
