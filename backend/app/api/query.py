@@ -252,9 +252,6 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
         rows_iter = ws.iter_rows(values_only=True)
         raw_headers = [str(h).strip() if h is not None else "" for h in next(rows_iter)]
         col_map = _resolve_columns(raw_headers, db_col_set)  # list[str|None], same length as raw_headers
-        # 追加模式：移除 id 列，由 auto_increment 从 MAX(id)+1 自动分配，不改动原有数据
-        if not overwrite:
-            col_map = [None if c == 'id' else c for c in col_map]
         mapped_cols = [c for c in col_map if c is not None]
         if not mapped_cols:
             raise HTTPException(400, detail="文件列名与表字段无法对应")
@@ -292,9 +289,6 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
         reader = csv_mod.reader(io.StringIO(text))
         raw_headers = [h.strip() for h in next(reader)]
         col_map = _resolve_columns(raw_headers, db_col_set)
-        # 追加模式：移除 id 列，由 auto_increment 从 MAX(id)+1 自动分配
-        if not overwrite:
-            col_map = [None if c == 'id' else c for c in col_map]
         mapped_cols = [c for c in col_map if c is not None]
         if not mapped_cols:
             raise HTTPException(400, detail="文件列名与表字段无法对应")
