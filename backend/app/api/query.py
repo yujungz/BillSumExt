@@ -203,6 +203,24 @@ def _map_row_csv(row: list[str], col_map: list[str | None]) -> list | None:
     return vals if vals else None
 
 
+async def _build_fillers(db, db_name: str, table: str, mapped_cols: list[str]) -> dict:
+    """For NOT NULL columns missing from the import file, build a fill plan:
+    {extra_col: (source_col, lookup_map)}. Currently fills ex_tokens.username
+    from ex_users.name, matching file's user_id -> ex_users.id."""
+    plan: dict = {}
+    if table == 'ex_tokens' and 'username' not in mapped_cols and 'user_id' in mapped_cols:
+        rows = await db.fetch_all("SELECT id, name FROM ex_users", db=db_name)
+        plan['username'] = ('user_id', {str(r['id']): (r['name'] or '') for r in rows})
+    return plan
+
+
+def _apply_fillers(vals: list, fillers: dict, src_idx: dict) -> None:
+    """Append filler-derived values onto vals (in fillers dict order)."""
+    for _ec, (src, lookup) in fillers.items():
+        sv = vals[src_idx[src]] if src_idx[src] < len(vals) else None
+        vals.append(lookup.get(str(sv), ''))
+
+
 @router.post("/import")
 async def import_sql(site: str = Query(...), table: str = Query(...), overwrite: bool = Query(False), file: UploadFile = File(...)):
     _validate_table(table)
@@ -256,8 +274,13 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
         if not mapped_cols:
             raise HTTPException(400, detail="文件列名与表字段无法对应")
 
-        cols_sql = ", ".join(f"`{c}`" for c in mapped_cols)
-        placeholders = ", ".join(["%s"] * len(mapped_cols))
+        # 补齐文件缺失的 NOT NULL 列（如 ex_tokens 缺 username 时按 user_id 关联 ex_users.name）
+        fillers = await _build_fillers(db, db_name, table, mapped_cols)
+        all_cols = mapped_cols + list(fillers.keys())
+        src_idx = {src: mapped_cols.index(src) for src, _ in fillers.values()}
+
+        cols_sql = ", ".join(f"`{c}`" for c in all_cols)
+        placeholders = ", ".join(["%s"] * len(all_cols))
         sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
 
         count = 0
@@ -265,6 +288,7 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
         for row in rows_iter:
             vals = _map_row(row, col_map)
             if vals is not None:
+                _apply_fillers(vals, fillers, src_idx)
                 batch.append(vals)
                 if len(batch) >= 500:
                     await db.execute_many(sql, batch, db=db_name)
@@ -293,8 +317,13 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
         if not mapped_cols:
             raise HTTPException(400, detail="文件列名与表字段无法对应")
 
-        cols_sql = ", ".join(f"`{c}`" for c in mapped_cols)
-        placeholders = ", ".join(["%s"] * len(mapped_cols))
+        # 补齐文件缺失的 NOT NULL 列（如 ex_tokens 缺 username 时按 user_id 关联 ex_users.name）
+        fillers = await _build_fillers(db, db_name, table, mapped_cols)
+        all_cols = mapped_cols + list(fillers.keys())
+        src_idx = {src: mapped_cols.index(src) for src, _ in fillers.values()}
+
+        cols_sql = ", ".join(f"`{c}`" for c in all_cols)
+        placeholders = ", ".join(["%s"] * len(all_cols))
         sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
 
         count = 0
@@ -302,6 +331,7 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
         for row in reader:
             vals = _map_row_csv(row, col_map)
             if vals is not None:
+                _apply_fillers(vals, fillers, src_idx)
                 batch.append(vals)
                 if len(batch) >= 500:
                     await db.execute_many(sql, batch, db=db_name)
