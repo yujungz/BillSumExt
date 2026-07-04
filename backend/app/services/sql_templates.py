@@ -79,11 +79,8 @@ def sql_old2new(tbn_new: str) -> list[str]:
 
 def sql_uptnew(tbn_new: str, mode: str = "full") -> list[str]:
     """Generate SQL to fill the processed log table with sales/buyer info.
-    mode: 'full' (wzg/pinova/ai), 'simple' (csp), 'minimal' (qn/digitalcloud)"""
+    mode: 'full' (wzg/pinova/ai), 'simple' (csp), 'minimal' (qn/digitalcloud，与 simple 一致)"""
     stmts: list[str] = []
-
-    if mode == "minimal":
-        return stmts
 
     # index ex_users and ex_channels (and ex_tokens for full mode)
     for tbl in ["ex_users", "ex_channels"] + (["ex_tokens"] if mode == "full" else []):
@@ -114,7 +111,7 @@ def sql_uptnew(tbn_new: str, mode: str = "full") -> list[str]:
             `{t}`.cache_price = `{t}`.model_ratio * 2 * `{t}`.cache_ratio,
             `{t}`.cache_creation_price = `{t}`.model_ratio * 2 * `{t}`.cache_creation_ratio,
             `{t}`.cache_creation_5M_price = `{t}`.model_ratio * 2 * `{t}`.cache_creation_ratio_5m""")
-    elif mode == "simple":
+    else:  # simple 与 minimal 一致：关联 ex_users + ex_channels（minimal 不再是空操作）
         stmts.append(f"""UPDATE `{t}`
             LEFT JOIN ex_users ON `{t}`.user_id = ex_users.id
             LEFT JOIN ex_channels ON `{t}`.channel_id = ex_channels.id
