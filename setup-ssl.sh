@@ -39,6 +39,12 @@ cat > /etc/nginx/sites-available/billsumext << 'EOF'
 server {
     listen 80;
     server_name shadow.burncloud.com;
+
+    # Let's Encrypt ACME challenge (for manual renewal)
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:8091;
         proxy_set_header Host $host;
@@ -49,6 +55,7 @@ server {
     }
 }
 EOF
+mkdir -p /var/www/html
 rm -f /etc/nginx/sites-enabled/default
 ln -sf /etc/nginx/sites-available/billsumext /etc/nginx/sites-enabled/
 nginx -t && systemctl enable nginx && systemctl restart nginx
@@ -70,8 +77,12 @@ echo "（请确保 $DOMAIN 已解析到本机，且 80 端口已开放）"
 echo ""
 
 set +e
-certbot --nginx -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive 2>&1
+# Stop nginx first so certbot can bind port 80 directly
+nginx -s stop 2>/dev/null || systemctl stop nginx 2>/dev/null || true
+certbot certonly --standalone -d "$DOMAIN" --email "$EMAIL" --agree-tos --non-interactive 2>&1
 CERTBOT_EXIT=$?
+# Restart nginx (will be reconfigured below)
+nginx 2>/dev/null || systemctl restart nginx 2>/dev/null || true
 set -e
 
 if [ $CERTBOT_EXIT -eq 0 ] && [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem" ]; then
@@ -85,7 +96,14 @@ if [ $CERTBOT_EXIT -eq 0 ] && [ -f "/etc/letsencrypt/live/$DOMAIN/fullchain.pem"
 server {
     listen 80;
     server_name shadow.burncloud.com;
-    return 301 https://$server_name$request_uri;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
 }
 
 server {
@@ -98,6 +116,10 @@ server {
     ssl_ciphers         HIGH:!aNULL:!MD5;
 
     client_max_body_size 100m;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
 
     location / {
         proxy_pass http://127.0.0.1:8091;
