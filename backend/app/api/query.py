@@ -281,7 +281,9 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
 
         cols_sql = ", ".join(f"`{c}`" for c in all_cols)
         placeholders = ", ".join(["%s"] * len(all_cols))
-        sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
+        # 追加模式：INSERT IGNORE，遇主键冲突的行跳过，不改变原有数据
+        verb = "INSERT IGNORE INTO" if not overwrite else "INSERT INTO"
+        sql = f"{verb} `{table}` ({cols_sql}) VALUES ({placeholders})"
 
         count = 0
         batch = []
@@ -324,7 +326,9 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
 
         cols_sql = ", ".join(f"`{c}`" for c in all_cols)
         placeholders = ", ".join(["%s"] * len(all_cols))
-        sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
+        # 追加模式：INSERT IGNORE，遇主键冲突的行跳过，不改变原有数据
+        verb = "INSERT IGNORE INTO" if not overwrite else "INSERT INTO"
+        sql = f"{verb} `{table}` ({cols_sql}) VALUES ({placeholders})"
 
         count = 0
         batch = []
