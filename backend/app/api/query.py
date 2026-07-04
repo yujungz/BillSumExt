@@ -204,7 +204,7 @@ def _map_row_csv(row: list[str], col_map: list[str | None]) -> list | None:
 
 
 @router.post("/import")
-async def import_sql(site: str = Query(...), table: str = Query(...), file: UploadFile = File(...)):
+async def import_sql(site: str = Query(...), table: str = Query(...), overwrite: bool = Query(False), file: UploadFile = File(...)):
     _validate_table(table)
     config = AppConfig.load()
     db_name = config.db_name(site)
@@ -239,7 +239,8 @@ async def import_sql(site: str = Query(...), table: str = Query(...), file: Uplo
         import openpyxl
         from app import database as db
 
-        await db.execute(f"TRUNCATE TABLE `{table}`", db=db_name)
+        if overwrite:
+            await db.execute(f"TRUNCATE TABLE `{table}`", db=db_name)
 
         # get actual db column names
         db_cols = await query_service.get_table_columns(site, table)
@@ -251,16 +252,15 @@ async def import_sql(site: str = Query(...), table: str = Query(...), file: Uplo
         rows_iter = ws.iter_rows(values_only=True)
         raw_headers = [str(h).strip() if h is not None else "" for h in next(rows_iter)]
         col_map = _resolve_columns(raw_headers, db_col_set)  # list[str|None], same length as raw_headers
+        # 追加模式：移除 id 列，由 auto_increment 从 MAX(id)+1 自动分配，不改动原有数据
+        if not overwrite:
+            col_map = [None if c == 'id' else c for c in col_map]
         mapped_cols = [c for c in col_map if c is not None]
         if not mapped_cols:
             raise HTTPException(400, detail="文件列名与表字段无法对应")
 
         cols_sql = ", ".join(f"`{c}`" for c in mapped_cols)
         placeholders = ", ".join(["%s"] * len(mapped_cols))
-        sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
-
-        cols_sql = ", ".join(f"`{c}`" for c in col_map)
-        placeholders = ", ".join(["%s"] * len(col_map))
         sql = f"INSERT INTO `{table}` ({cols_sql}) VALUES ({placeholders})"
 
         count = 0
@@ -282,7 +282,8 @@ async def import_sql(site: str = Query(...), table: str = Query(...), file: Uplo
         import csv as csv_mod
         from app import database as db
 
-        await db.execute(f"TRUNCATE TABLE `{table}`", db=db_name)
+        if overwrite:
+            await db.execute(f"TRUNCATE TABLE `{table}`", db=db_name)
 
         db_cols = await query_service.get_table_columns(site, table)
         db_col_set = {c["name"] for c in db_cols}
@@ -291,6 +292,9 @@ async def import_sql(site: str = Query(...), table: str = Query(...), file: Uplo
         reader = csv_mod.reader(io.StringIO(text))
         raw_headers = [h.strip() for h in next(reader)]
         col_map = _resolve_columns(raw_headers, db_col_set)
+        # 追加模式：移除 id 列，由 auto_increment 从 MAX(id)+1 自动分配
+        if not overwrite:
+            col_map = [None if c == 'id' else c for c in col_map]
         mapped_cols = [c for c in col_map if c is not None]
         if not mapped_cols:
             raise HTTPException(400, detail="文件列名与表字段无法对应")

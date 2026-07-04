@@ -35,6 +35,7 @@
               </template>
             </el-dropdown>
             <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
+            <el-checkbox v-if="canImport" v-model="overwrite" style="margin: 0 12px">覆盖</el-checkbox>
             <el-button v-if="canImport" type="warning" :loading="importLoading" @click="triggerImport">导入</el-button>
             <el-button v-if="canParse" type="warning" :loading="parseLoading" @click="doParse">拆解</el-button>
           </el-form-item>
@@ -135,6 +136,7 @@ const page = ref(1)
 const pageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
 const loading = ref(false)
 const importLoading = ref(false)
+const overwrite = ref(false)
 const parseLoading = ref(false)
 const exportTimerText = ref('')
 
@@ -500,7 +502,7 @@ function triggerImport() {
 async function doImport(file) {
   try {
     await ElMessageBox.confirm(
-      `确认导入文件 "${file.name}" 到表 "${selectedTable.value}"？`,
+      `确认导入文件 "${file.name}" 到表 "${selectedTable.value}"？（${overwrite.value ? '覆盖：先清空再导入，保留文件ID' : '追加：从最大ID+1开始，不改原有数据'}）`,
       '导入确认',
       { confirmButtonText: '确认导入', cancelButtonText: '取消', type: 'info' }
     )
@@ -509,7 +511,7 @@ async function doImport(file) {
   try {
     const formData = new FormData()
     formData.append('file', file)
-    await api.query.importTable(site.value, selectedTable.value, formData)
+    await api.query.importTable(site.value, selectedTable.value, formData, overwrite.value)
     ElMessage.success('导入成功')
     await loadTables()
     if (selectedTable.value) loadData()
