@@ -250,7 +250,7 @@ const TABLE_FILTERS = {
     { field: 'user_id', label: '用户ID', type: 'number' },
   ],
   ex_users: [
-    { field: 'username', label: '用户名称', type: 'string' },
+    { field: 'name', label: '用户名称', type: 'string' },
     { field: 'seller', label: '销售员', type: 'string' },
     { field: 'remark', label: '备注', type: 'string' },
   ],

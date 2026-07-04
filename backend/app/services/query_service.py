@@ -67,6 +67,10 @@ async def query_table(site: str, table_name: str, page: int = 1,
     config = AppConfig.load()
     db_name = config.db_name(site)
 
+    # fetch real columns to validate filter keys (avoid SQL errors on missing cols)
+    real_cols = await get_table_columns(site, table_name)
+    real_col_names = {c["name"] for c in real_cols}
+
     # build where clause from filters
     where = ""
     params = []
@@ -75,6 +79,9 @@ async def query_table(site: str, table_name: str, page: int = 1,
         for key, val in filters.items():
             if val is None or val == "":
                 continue
+            base_key = key.replace('_start', '').replace('_end', '')
+            if base_key not in real_col_names:
+                continue  # skip filters for columns that don't exist in this table
             if key == 'created_at_start':
                 conditions.append(
                     "created_at >= UNIX_TIMESTAMP(%s)-28800"
@@ -164,9 +171,13 @@ async def export_all_data(site: str, table_name: str, filters: dict | None = Non
     where = ""
     params = []
     if filters:
+        real_col_names = {c["name"] for c in columns}
         conditions = []
         for key, val in filters.items():
             if val is None or val == "":
+                continue
+            base_key = key.replace('_start', '').replace('_end', '')
+            if base_key not in real_col_names:
                 continue
             if key == 'created_at_start':
                 conditions.append("created_at >= UNIX_TIMESTAMP(%s)-28800")
