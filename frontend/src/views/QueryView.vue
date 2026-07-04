@@ -248,6 +248,7 @@ const TABLE_FILTERS = {
   ex_tokens: [
     { field: 'name', label: 'token名称', type: 'string' },
     { field: 'user_id', label: '用户ID', type: 'number' },
+    { field: 'username', label: '用户名称', type: 'string' },
   ],
   ex_users: [
     { field: 'name', label: '用户名称', type: 'string' },
