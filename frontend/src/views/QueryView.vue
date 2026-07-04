@@ -182,21 +182,27 @@ function fieldConfigKey(table) {
   return table
 }
 
+// 各表默认隐藏的列（仅用户未保存过字段配置时生效；user_id 等其余列默认显示）
+const DEFAULT_HIDDEN_COLS = { ex_tokens: ['username'] }
+
 function loadFieldConfig() {
   const t = selectedTable.value
   let saved = {}
+  let hasSaved = false
   if (t) {
     try {
       const raw = localStorage.getItem(FIELDS_KEY_PREFIX + fieldConfigKey(t))
-      saved = raw ? JSON.parse(raw) : {}
+      if (raw) { saved = JSON.parse(raw); hasSaved = true }
     } catch { saved = {} }
   }
+  // 仅在用户未保存过配置时，应用默认隐藏列
+  const hidden = (!hasSaved && DEFAULT_HIDDEN_COLS[t]) ? new Set(DEFAULT_HIDDEN_COLS[t]) : new Set()
   Object.keys(fieldConfig).forEach(k => delete fieldConfig[k])
   for (const c of columns.value) {
     const s = saved[c.name]
     fieldConfig[c.name] = (s && typeof s === 'object')
       ? { selected: s.selected !== false, label: s.label || c.name }
-      : { selected: true, label: c.name }
+      : { selected: !hidden.has(c.name), label: c.name }
   }
 }
 
