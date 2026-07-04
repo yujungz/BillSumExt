@@ -28,12 +28,14 @@ services:
     volumes:
       - BillSumExt_app_data:/app/data
       - /e/work/(03)burncloud/ssh:/ssh_keys:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     environment:
       - MYSQL_HOST=BillSumExt-mysql
       - MYSQL_PORT=3306
       - MYSQL_USER=root
       - MYSQL_PASSWORD=Bill1@3
       - MYSQL_CONTAINER=BillSumExt-mysql
+      - SSL_DOMAIN=shadow.burncloud.com
     depends_on:
       - mysql
     networks:

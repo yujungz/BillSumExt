@@ -5,7 +5,7 @@
 #   sudo PORT80_SERVICE=caddy bash renew-ssl.sh
 # PORT80_SERVICE = 占用 80 端口的 systemd 服务名；不传则自动检测。
 #
-# 流程：临时停 80 服务 → certbot renew → 立即启动归还 80 → reload nginx
+# 流程：临时停 80 服务 → certbot renew → 归还 80 → reload 容器内 nginx
 
 set -e
 
@@ -33,5 +33,7 @@ echo "归还 80 端口给 $PORT80_SERVICE..."
 systemctl start "$PORT80_SERVICE" || true
 trap - EXIT
 
-nginx -s reload 2>/dev/null || systemctl reload nginx 2>/dev/null || true
+# 让容器内 nginx 重新加载证书(挂载文件已更新，但 nginx 启动时缓存了证书)
+echo "reload 容器内 nginx..."
+docker exec BillSumExt-app nginx -s reload 2>/dev/null || docker restart BillSumExt-app 2>/dev/null || true
 echo "✅ 续期完成，80 端口已归还 $PORT80_SERVICE"
