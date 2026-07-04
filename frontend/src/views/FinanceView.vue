@@ -78,6 +78,11 @@
                 <el-checkbox v-model="showPlatformQuota" label="平台额度" style="margin-right: 8px" />
                 <el-checkbox v-model="showTotalCost" label="消费额度" style="margin-right: 8px" />
                 <el-checkbox v-model="showDetail" label="用户明细" style="margin-right: 8px" />
+                <el-select v-model="sortMode" size="small" style="width: 120px; margin-right: 8px">
+                  <el-option label="按用户ID排序" value="用户ID" />
+                  <el-option label="按额度排序" value="额度" />
+                </el-select>
+                <el-checkbox v-model="monthlySettle" label="月度结算" style="margin-right: 8px" />
                 <span class="granularity-group">
                   <span class="granularity-group-label">统计粒度：</span>
                   <el-checkbox v-model="granularity.model" label="模型名" />
@@ -93,7 +98,7 @@
             <el-tabs v-model="userStatsSubTab" class="sub-tabs">
               <el-tab-pane label="月汇总" name="monthly">
                 <div ref="monthlyTableWrapper" class="table-wrapper sub-table-wrapper">
-                  <el-table :data="userStatsMonthly" border stripe :height="subTableHeight" v-loading="userStatsLoading"
+                  <el-table :data="sortedMonthly" border stripe :height="subTableHeight" v-loading="userStatsLoading"
                     style="width: 100%" show-overflow-tooltip show-summary :summary-method="userStatsSummary">
                     <el-table-column v-for="col in userStatsMonthlyCols" :key="col.key" :prop="col.key" :label="col.label"
                       :width="col.width" :formatter="col.formatter" />
@@ -102,7 +107,7 @@
               </el-tab-pane>
               <el-tab-pane label="日统计" name="daily">
                 <div ref="dailyTableWrapper" class="table-wrapper sub-table-wrapper">
-                  <el-table :data="userStatsDaily" border stripe :height="subTableHeight" v-loading="userStatsLoading"
+                  <el-table :data="sortedDaily" border stripe :height="subTableHeight" v-loading="userStatsLoading"
                     style="width: 100%" show-overflow-tooltip show-summary :summary-method="userStatsSummary">
                     <el-table-column v-for="col in userStatsDailyCols" :key="col.key" :prop="col.key" :label="col.label"
                       :width="col.width" :formatter="col.formatter" />
@@ -227,6 +232,10 @@ function fmt6(row, col, val) {
 
 function fmt4(row, col, val) {
   return val != null ? Number(val).toFixed(4) : ''
+}
+
+function fmt2(row, col, val) {
+  return val != null ? Number(val).toFixed(2) : ''
 }
 
 // ── Export timer ──
@@ -428,6 +437,8 @@ const showPlatformQuota = ref(true)
 const batchExport = ref(false)
 const showDetail = ref(false)
 const mergeExport = ref(false)
+const sortMode = ref('用户ID')
+const monthlySettle = ref(false)
 const GRANULARITY_KEY = 'billsum_user_stats_granularity'
 const granularity = reactive({ model: false, token: false })
 
@@ -488,6 +499,7 @@ const _NO_SUM_KEYS_STATS = new Set([
   '结算周期', '用户名', '模型名', '用户ID', 'Token名称', '日期',
   '序号', '时间',
   '输入单价', '输出单价', '读取缓存单价', '创建缓存5M单价', '创建缓存1H单价',
+  '折扣', '汇率',
 ])
 
 function userStatsSummary({ columns, data }) {
@@ -504,10 +516,49 @@ function userStatsSummary({ columns, data }) {
       || userStatsDetailCols.value.find(c => c.key === key)
     if (colDef?.formatter === fmt6) return sum.toFixed(6)
     if (colDef?.formatter === fmt4) return sum.toFixed(4)
+    if (colDef?.formatter === fmt2) return sum.toFixed(2)
     if (colDef?.formatter === fmtInt) return sum.toLocaleString()
     return sum.toLocaleString()
   })
 }
+
+// ── 额度取值：平台优先，否则消费；都没勾选时排序退到输出Token ──
+function _quotaValue(row) {
+  if (showPlatformQuota.value) return Number(row['平台额度']) || 0
+  if (showTotalCost.value) return Number(row['消费额度']) || 0
+  return Number(row['输出token(M)']) || 0
+}
+
+// 月汇总排序：用户ID(顺序) / 额度(倒序)
+const sortedMonthly = computed(() => {
+  const rows = [...userStatsMonthly.value]
+  if (sortMode.value === '额度') {
+    rows.sort((a, b) => _quotaValue(b) - _quotaValue(a))
+  } else {
+    rows.sort((a, b) => {
+      const ua = Number(a['用户ID']) || 0
+      const ub = Number(b['用户ID']) || 0
+      if (ua !== ub) return ua - ub
+      return String(a['结算周期']).localeCompare(String(b['结算周期']))
+    })
+  }
+  return rows
+})
+
+// 日统计：日期倒序优先，排序方式为次级键
+const sortedDaily = computed(() => {
+  const rows = [...userStatsDaily.value]
+  rows.sort((a, b) => {
+    const da = String(a['日期'])
+    const db = String(b['日期'])
+    if (da !== db) return db.localeCompare(da)
+    if (sortMode.value === '额度') return _quotaValue(b) - _quotaValue(a)
+    const ua = Number(a['用户ID']) || 0
+    const ub = Number(b['用户ID']) || 0
+    return ua - ub
+  })
+  return rows
+})
 
 // Detail summary uses backend-computed totals across ALL records (not just current page)
 function detailSummary({ columns }) {
@@ -529,6 +580,7 @@ function detailSummary({ columns }) {
 const userStatsMonthlyCols = computed(() => {
   const cols = [
     { key: '结算周期', label: '结算周期', width: 100 },
+    { key: '用户ID', label: '用户ID', width: 80 },
     { key: '用户名', label: '用户名', width: 120 },
   ]
   if (granularity.model) cols.push({ key: '模型名', label: '模型名', width: 180 })
@@ -538,6 +590,11 @@ const userStatsMonthlyCols = computed(() => {
   )
   if (showTotalCost.value) cols.push({ key: '消费额度', label: '消费额度', width: 120, formatter: fmt6 })
   if (showPlatformQuota.value) cols.push({ key: '平台额度', label: '平台额度', width: 120, formatter: fmt6 })
+  if (monthlySettle.value) {
+    cols.push({ key: '折扣', label: '折扣', width: 90, formatter: fmt2 })
+    cols.push({ key: '汇率', label: '汇率', width: 90, formatter: fmt2 })
+    cols.push({ key: '实际款项(人民币)', label: '实际款项(人民币)', width: 140, formatter: fmt2 })
+  }
   return cols
 })
 
@@ -637,6 +694,9 @@ async function doUserStatsQuery() {
       table: userStatsForm.table,
       username: userStatsForm.username,
       granularity: granularityStr.value,
+      with_platform: showPlatformQuota.value,
+      with_total_cost: showTotalCost.value,
+      monthly_settle: monthlySettle.value,
     }
     if (userStatsForm.dateStart) params.date_start = userStatsForm.dateStart
     if (userStatsForm.dateEnd) params.date_end = userStatsForm.dateEnd
@@ -751,6 +811,7 @@ async function _doSingleExport(saveHandle, fileName) {
     with_platform: showPlatformQuota.value,
     with_detail: showDetail.value,
     with_total_cost: showTotalCost.value,
+    monthly_settle: monthlySettle.value,
     granularity: granularityStr.value,
   })
   const taskId = td.task_id
@@ -826,6 +887,7 @@ async function _doBatchExport() {
           with_platform: showPlatformQuota.value,
           with_detail: showDetail.value,
           with_total_cost: showTotalCost.value,
+          monthly_settle: monthlySettle.value,
           granularity: granularityStr.value,
         })
         const taskId = td.task_id
