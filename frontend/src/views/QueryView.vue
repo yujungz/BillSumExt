@@ -214,6 +214,10 @@ async function openFieldDialog() {
 }
 
 function saveFields() {
+  if (!fieldRows.value.some(r => r.selected)) {
+    ElMessage.warning('至少要选中一个字段')
+    return
+  }
   for (const r of fieldRows.value) {
     fieldConfig[r.name] = { selected: r.selected, label: (r.label || r.name) }
   }
