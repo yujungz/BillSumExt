@@ -362,9 +362,15 @@ async def parse_table(site: str = Query(...), table: str = Query(...)):
         'users': parser_service.parse_users,
     }[table]
 
-    result = await parse_fn(site)
-
-    content = parser_service.build_excel_bytes(table, result["excel_headers"], result["excel_data"])
+    try:
+        result = await parse_fn(site)
+        content = parser_service.build_excel_bytes(table, result["excel_headers"], result["excel_data"])
+    except Exception as e:
+        msg = str(e)
+        # 1146 = 原始基础表(channels/users/tokens)未导入
+        if "1146" in msg:
+            raise HTTPException(400, detail=f"原始表 `{table}` 不存在。请先在『数据传输』中勾选基础表(channels/users/tokens)导入后，再执行拆解。")
+        raise HTTPException(500, detail=f"拆解失败: {msg[:200]}")
 
     return Response(
         content=content,
