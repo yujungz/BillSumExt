@@ -24,7 +24,7 @@
             <el-button type="info" plain :icon="Operation" :disabled="!selectedTable" @click="openFieldDialog">字段选择</el-button>
             <el-button type="primary" :loading="loading" @click="doQuery">查询</el-button>
             <el-button type="danger" @click="deleteConfirm">删除表</el-button>
-            <el-dropdown split-button type="success" @click="exportConfirm('xlsx')" @command="exportConfirm">
+            <el-dropdown split-button type="success" style="margin-left: 12px" @click="exportConfirm('xlsx')" @command="exportConfirm">
               导出
               <template #dropdown>
                 <el-dropdown-menu>
@@ -37,7 +37,7 @@
             <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
             <el-checkbox v-if="canImport" v-model="overwrite" style="margin: 0 12px">覆盖</el-checkbox>
             <el-button v-if="canImport" type="warning" :loading="importLoading" @click="triggerImport">导入</el-button>
-            <el-button v-if="canParse" type="warning" :loading="parseLoading" @click="doParse">拆解</el-button>
+            <el-button v-if="canParse" type="warning" :loading="parseLoading" style="margin-left: 12px" @click="doParse">拆解</el-button>
           </el-form-item>
         </el-form>
 
