@@ -3,6 +3,8 @@
 import io
 import re
 import logging
+import datetime
+from decimal import Decimal
 
 import openpyxl
 from openpyxl.styles import Font
@@ -553,6 +555,19 @@ _EXCEL_WIDTHS = {
 }
 
 
+def _to_cell_value(v):
+    """Coerce a value to a type openpyxl accepts in a worksheet cell.
+    Guards against DB-driver types (Decimal subclasses, numpy, etc.) that
+    raise 'X cannot be used in worksheets'."""
+    if v is None or isinstance(v, (str, int, float, bool)):
+        return v
+    if isinstance(v, (datetime.datetime, datetime.date, datetime.time)):
+        return v
+    if isinstance(v, Decimal):
+        return float(v)
+    return str(v)
+
+
 def build_excel_bytes(table_type: str, headers: list[str], rows: list[tuple]) -> bytes:
     """Generate a proper .xlsx file using openpyxl."""
     wb = openpyxl.Workbook()
@@ -569,7 +584,7 @@ def build_excel_bytes(table_type: str, headers: list[str], rows: list[tuple]) ->
 
     for ri, row in enumerate(rows, 2):
         for ci, val in enumerate(row, 1):
-            ws.cell(row=ri, column=ci, value=val)
+            ws.cell(row=ri, column=ci, value=_to_cell_value(val))
 
     buf = io.BytesIO()
     wb.save(buf)
