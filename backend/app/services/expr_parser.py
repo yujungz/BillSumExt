@@ -15,6 +15,7 @@ Variable → table field mapping:
     cr    → cache_tokens
     cc5m  → cache_creation_tokens_5m
     cc1h  → GREATEST(0, cache_creation_tokens - cache_creation_tokens_5m)
+    len   → (prompt_tokens + completion_tokens)   # 用于按上下文长度分档的公式
 """
 
 import base64
@@ -32,6 +33,8 @@ VAR_TO_DB = {
     "cr": "cache_tokens",
     "cc5m": "cache_creation_tokens_5m",
     "cc1h": "GREATEST(0, cache_creation_tokens - cache_creation_tokens_5m)",
+    # len = token 总长度(prompt+completion)，用于按上下文长度分档的定价公式
+    "len": "(prompt_tokens + completion_tokens)",
 }
 
 # Price field names — written directly from coefficients
