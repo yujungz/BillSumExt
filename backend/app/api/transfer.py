@@ -74,6 +74,14 @@ async def async_all(req: TransferRequest):
     return {"task_id": task_id}
 
 
+@router.post("/async-fill")
+async def async_fill(req: TransferRequest):
+    task_id = await transfer_service.start_fill_task(
+        req.site, req.period_type, req.ym, req.date_start, req.date_end
+    )
+    return {"task_id": task_id}
+
+
 @router.get("/task-status")
 async def task_status(task_id: str):
     result = transfer_service.get_task_status(task_id)

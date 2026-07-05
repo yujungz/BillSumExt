@@ -14,6 +14,7 @@ export default {
     fill: (data) => api.post('/transfer/fill', data),
     all: (data) => api.post('/transfer/all', data),
     asyncAll: (data) => api.post('/transfer/async-all', data),
+    asyncFill: (data) => api.post('/transfer/async-fill', data),
     taskStatus: (taskId) => api.get('/transfer/task-status', { params: { task_id: taskId } }),
     uptcustomer: (data) => api.post('/transfer/uptcustomer', data),
   },

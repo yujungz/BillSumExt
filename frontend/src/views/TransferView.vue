@@ -300,6 +300,24 @@ async function doStep(step) {
   logs.value = []
   stepActive.value = -1
   startTimer(step)
+
+  // fill 走异步，避免远程同步长连接被中间网络层掐断(Network Error)
+  if (step === 'fill') {
+    try {
+      const { data } = await api.transfer.asyncFill(getPayload())
+      taskId.value = data.task_id
+      saveState()
+      pollSingleTask(data.task_id, lk, step)
+    } catch (e) {
+      addLog(step, false, e.response?.data?.detail || e.message)
+      stepActive.value = 0
+      ElMessage.error(step + ' 启动失败: ' + (e.response?.data?.detail || e.message))
+      loading[lk] = false
+      stopTimer()
+    }
+    return
+  }
+
   try {
     const { data } = await api.transfer[step](getPayload())
     const countInfo = data.count != null ? `（${data.count} 条记录）` : ''
@@ -392,6 +410,33 @@ function pollTask(id) {
         taskId.value = null
         stopTimer()
         showResults(data.results)
+      }
+    } catch { /* keep polling */ }
+  }, 3000)
+}
+
+function pollSingleTask(id, loadingKey, step) {
+  if (pollTimer) clearInterval(pollTimer)
+  pollTimer = setInterval(async () => {
+    try {
+      const { data } = await api.transfer.taskStatus(id)
+      if (data.status === 'done') {
+        clearInterval(pollTimer)
+        pollTimer = null
+        loading[loadingKey] = false
+        taskId.value = null
+        stopTimer()
+        const r = (data.results || [])[0] || {}
+        const cnt = r.count != null ? `（${r.count} 条记录）` : ''
+        addLog(r.step || step, r.success, r.error || (r.log_name || '') + cnt)
+        stepActive.value = 0
+        if (r.success) {
+          ElMessage.success((r.step || step) + ' 完成')
+          if (r.log_name) refreshLogTableSelector(r.log_name)
+        } else {
+          ElMessage.error(step + ' 失败: ' + (r.error || ''))
+        }
+        saveState()
       }
     } catch { /* keep polling */ }
   }, 3000)

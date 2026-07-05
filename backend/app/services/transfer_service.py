@@ -52,6 +52,35 @@ async def start_task(site, period_type, ym, date_start, date_end, tables):
     return task_id
 
 
+async def start_fill_task(site, period_type, ym, date_start, date_end):
+    """Start a background fill-only task. Avoids synchronous long-connection
+    timeouts when a single 本地填充 is run on large tables."""
+    task_id = uuid.uuid4().hex[:8]
+    _tasks[task_id] = {
+        "task_id": task_id,
+        "status": "running",
+        "results": [],
+        "start_time": time.time(),
+        "end_time": None,
+    }
+
+    async def _run():
+        try:
+            log_name = _log_name(period_type, ym, date_start, date_end)
+            result = await fill_local(site, log_name)
+            _tasks[task_id]["results"] = [result]
+            _tasks[task_id]["status"] = "done"
+        except Exception as e:
+            log.error(f"Background fill task {task_id} failed: {e}")
+            _tasks[task_id]["results"] = [{"success": False, "step": "fill", "error": str(e)}]
+            _tasks[task_id]["status"] = "done"
+        finally:
+            _tasks[task_id]["end_time"] = time.time()
+
+    asyncio.create_task(_run())
+    return task_id
+
+
 def get_task_status(task_id: str) -> dict | None:
     t = _tasks.get(task_id)
     if not t:
