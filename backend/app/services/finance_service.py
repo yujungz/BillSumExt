@@ -635,6 +635,7 @@ def _write_sheet_streaming(ws, rows: list[dict], total_fields: list[str]):
     """Write rows to a write-only sheet with header bold + total row."""
     import openpyxl
     from openpyxl.styles import Font, Alignment
+    from app.services.excel_util import sanitize_row
     if not rows:
         return
     headers = list(rows[0].keys())
@@ -644,7 +645,7 @@ def _write_sheet_streaming(ws, rows: list[dict], total_fields: list[str]):
         c.alignment = Alignment(horizontal="center")
     ws.append(header_cells)
     for r in rows:
-        ws.append(list(r.values()))
+        ws.append(sanitize_row(list(r.values())))
 
     last_data_row = len(rows) + 1
     total_row = ["合计"] + ["" for _ in range(len(headers) - 1)]
@@ -888,6 +889,7 @@ def _make_workbook(headers: list[str], rows: list[dict],
     import openpyxl
     from openpyxl.styles import Font, Alignment
     from openpyxl.utils import get_column_letter
+    from app.services.excel_util import sanitize_row
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -896,13 +898,13 @@ def _make_workbook(headers: list[str], rows: list[dict],
     bold = Font(bold=True)
     center = Alignment(horizontal="center")
 
-    ws.append(headers)
+    ws.append(sanitize_row(headers))
     for cell in ws[1]:
         cell.font = bold
         cell.alignment = center
 
     for r in rows:
-        ws.append(list(r.values()))
+        ws.append(sanitize_row(list(r.values())))
 
     if total_fields:
         total_row = ["" for _ in headers]

@@ -91,9 +91,10 @@ def _build_supplier_excel(rows):
         cell.font = bold
         cell.alignment = Alignment(horizontal="center")
 
+    from app.services.excel_util import sanitize_row
     total_col = headers.index("总费用（USD）") + 1
     for r in rows:
-        ws.append(list(r.values()) + ["", ""])
+        ws.append(sanitize_row(list(r.values()) + ["", ""]))
 
     ws.append(["" for _ in headers])
     total_row = ["" for _ in headers]
@@ -255,8 +256,9 @@ def _append_sheet_with_totals(ws, rows, total_fields):
     for cell in ws[1]:
         cell.font = bold
         cell.alignment = Alignment(horizontal="center")
+    from app.services.excel_util import sanitize_row
     for r in rows:
-        ws.append(list(r.values()))
+        ws.append(sanitize_row(list(r.values())))
 
     # Build total row with SUM formulas at correct column positions
     last_data_row = len(rows) + 1

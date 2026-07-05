@@ -17,6 +17,7 @@ from openpyxl.styles import Font
 from app import database as db
 from app.config import AppConfig
 from app.services import stats_service
+from app.services.excel_util import cell_value, sanitize_row
 
 log = logging.getLogger(__name__)
 
@@ -182,13 +183,13 @@ async def _write_detail_sheets(wb, config, detail_cols, where, params):
                 name = "日志明细" if sheet_idx == 1 else f"日志明细_{sheet_idx}"
                 ws = wb.create_sheet(name)
                 rows_in_sheet = 0
-                ws.append(headers)
+                ws.append(sanitize_row(headers))
 
             vals = []
             for cdef in detail_cols:
                 v = row_dict.get(cdef["label"])
                 vals.append(float(v) if v is not None and hasattr(v, "__float__") else v)
-            ws.append(vals)
+            ws.append(sanitize_row(vals))
             rows_in_sheet += 1
 
         # Keyset: last row's id becomes the bound for the next batch
@@ -400,7 +401,7 @@ async def export_stats(req: StatsRequest):
     for ri, row in enumerate(result, 2):
         for ci, (key, _) in enumerate(visible, 1):
             v = row.get(key)
-            ws.cell(row=ri, column=ci, value=float(v) if v is not None and hasattr(v, "__float__") else v)
+            ws.cell(row=ri, column=ci, value=cell_value(float(v) if v is not None and hasattr(v, "__float__") else v))
 
     last_data_row = len(result) + 1
     total_row = ["合计"] + [""] * (len(visible) - 1)

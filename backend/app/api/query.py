@@ -135,6 +135,7 @@ def _apply_fields(columns, fields_json):
 def _build_xlsx(columns, rows):
     import openpyxl
     from openpyxl.styles import Font
+    from app.services.excel_util import cell_value
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -145,7 +146,7 @@ def _build_xlsx(columns, rows):
         ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = max(len(str(c['label'])) * 2, 12)
     for ri, row in enumerate(rows, 2):
         for ci, c in enumerate(columns, 1):
-            ws.cell(row=ri, column=ci, value=row.get(c['name'], ''))
+            ws.cell(row=ri, column=ci, value=cell_value(row.get(c['name'], '')))
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
