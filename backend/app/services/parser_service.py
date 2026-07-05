@@ -555,17 +555,26 @@ _EXCEL_WIDTHS = {
 }
 
 
+# XML/Excel 非法控制字符(保留 \t=\x09 \n=\x0a \r=\x0d)，写单元格前剔除
+_ILLEGAL_CELL_CHARS = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f]')
+
+
 def _to_cell_value(v):
     """Coerce a value to a type openpyxl accepts in a worksheet cell.
-    Guards against DB-driver types (Decimal subclasses, numpy, etc.) that
-    raise 'X cannot be used in worksheets'."""
-    if v is None or isinstance(v, (str, int, float, bool)):
+    Guards against DB-driver types (Decimal subclasses, numpy, etc.) and
+    strips illegal XML control chars (e.g. \\x08) that raise
+    'X cannot be used in worksheets'."""
+    if v is None:
+        return None
+    if isinstance(v, str):
+        return _ILLEGAL_CELL_CHARS.sub('', v)
+    if isinstance(v, (int, float, bool)):
         return v
     if isinstance(v, (datetime.datetime, datetime.date, datetime.time)):
         return v
     if isinstance(v, Decimal):
         return float(v)
-    return str(v)
+    return _ILLEGAL_CELL_CHARS.sub('', str(v))
 
 
 def build_excel_bytes(table_type: str, headers: list[str], rows: list[tuple]) -> bytes:
