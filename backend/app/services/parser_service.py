@@ -584,7 +584,12 @@ def build_excel_bytes(table_type: str, headers: list[str], rows: list[tuple]) ->
 
     for ri, row in enumerate(rows, 2):
         for ci, val in enumerate(row, 1):
-            ws.cell(row=ri, column=ci, value=_to_cell_value(val))
+            safe = _to_cell_value(val)
+            try:
+                ws.cell(row=ri, column=ci, value=safe)
+            except Exception as ex:
+                log.warning("cell write failed, fallback to str — value=%r type=%s err=%s", safe, type(safe).__name__, ex)
+                ws.cell(row=ri, column=ci, value=str(safe))
 
     buf = io.BytesIO()
     wb.save(buf)
