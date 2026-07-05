@@ -207,11 +207,21 @@ def _map_row_csv(row: list[str], col_map: list[str | None]) -> list | None:
 async def _build_fillers(db, db_name: str, table: str, mapped_cols: list[str]) -> dict:
     """For NOT NULL columns missing from the import file, build a fill plan:
     {extra_col: (source_col, lookup_map)}. Currently fills ex_tokens.username
-    from ex_users.name, matching file's user_id -> ex_users.id."""
+    via user_id -> users.id (取 users.username)，回退 ex_users.name；
+    表不存在或无匹配则填空字符串。任何异常都不让导入失败。"""
     plan: dict = {}
     if table == 'ex_tokens' and 'username' not in mapped_cols and 'user_id' in mapped_cols:
-        rows = await db.fetch_all("SELECT id, name FROM ex_users", db=db_name)
-        plan['username'] = ('user_id', {str(r['id']): (r['name'] or '') for r in rows})
+        lookup: dict[str, str] = {}
+        for sql, col in [("SELECT id, username FROM users", "username"),
+                         ("SELECT id, name FROM ex_users", "name")]:
+            try:
+                rows = await db.fetch_all(sql, db=db_name)
+                lookup = {str(r['id']): (r.get(col) or '') for r in rows}
+                if lookup:
+                    break
+            except Exception:
+                continue  # 表不存在(1146)等，尝试下一个来源
+        plan['username'] = ('user_id', lookup)
     return plan
 
 
@@ -220,6 +230,31 @@ def _apply_fillers(vals: list, fillers: dict, src_idx: dict) -> None:
     for _ec, (src, lookup) in fillers.items():
         sv = vals[src_idx[src]] if src_idx[src] < len(vals) else None
         vals.append(lookup.get(str(sv), ''))
+
+
+async def _not_null_defaults(db, db_name: str, table: str) -> dict:
+    """Return {col: default} for NOT NULL columns: numeric→0, others→''.
+    Used to fill empty cells so INSERT doesn't fail with 'X cannot be null'."""
+    try:
+        rows = await db.fetch_all(
+            "SELECT COLUMN_NAME AS n, DATA_TYPE AS t FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s AND IS_NULLABLE='NO'",
+            (db_name, table), db=db_name,
+        )
+    except Exception:
+        return {}
+    out: dict = {}
+    for c in rows:
+        dt = (c.get("t") or "").lower()
+        out[c["n"]] = 0 if any(k in dt for k in ("int", "decimal", "double", "float")) else ""
+    return out
+
+
+def _fill_empty_with_defaults(vals: list, mapped_cols: list[str], defaults: dict) -> None:
+    """In-place: replace None in vals with the column's NOT NULL default."""
+    for i, col in enumerate(mapped_cols):
+        if i < len(vals) and vals[i] is None and col in defaults:
+            vals[i] = defaults[col]
 
 
 @router.post("/import")
@@ -277,6 +312,7 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
 
         # 补齐文件缺失的 NOT NULL 列（如 ex_tokens 缺 username 时按 user_id 关联 ex_users.name）
         fillers = await _build_fillers(db, db_name, table, mapped_cols)
+        defaults = await _not_null_defaults(db, db_name, table)
         all_cols = mapped_cols + list(fillers.keys())
         src_idx = {src: mapped_cols.index(src) for src, _ in fillers.values()}
 
@@ -291,6 +327,7 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
         for row in rows_iter:
             vals = _map_row(row, col_map)
             if vals is not None:
+                _fill_empty_with_defaults(vals, mapped_cols, defaults)
                 _apply_fillers(vals, fillers, src_idx)
                 batch.append(vals)
                 if len(batch) >= 500:
@@ -322,6 +359,7 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
 
         # 补齐文件缺失的 NOT NULL 列（如 ex_tokens 缺 username 时按 user_id 关联 ex_users.name）
         fillers = await _build_fillers(db, db_name, table, mapped_cols)
+        defaults = await _not_null_defaults(db, db_name, table)
         all_cols = mapped_cols + list(fillers.keys())
         src_idx = {src: mapped_cols.index(src) for src, _ in fillers.values()}
 
@@ -336,6 +374,7 @@ async def import_sql(site: str = Query(...), table: str = Query(...), overwrite:
         for row in reader:
             vals = _map_row_csv(row, col_map)
             if vals is not None:
+                _fill_empty_with_defaults(vals, mapped_cols, defaults)
                 _apply_fillers(vals, fillers, src_idx)
                 batch.append(vals)
                 if len(batch) >= 500:
