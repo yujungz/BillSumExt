@@ -309,11 +309,21 @@ class StatsRequest(BaseModel):
 
 @router.post("/query")
 async def query_stats(req: StatsRequest):
-    result = await stats_service.query_stats(
-        req.site, req.table_name, req.group_by, req.filters, req.show_zero,
-        show_channel_name=req.show_channel_name,
-    )
-    return {"data": result}
+    try:
+        result = await stats_service.query_stats(
+            req.site, req.table_name, req.group_by, req.filters, req.show_zero,
+            show_channel_name=req.show_channel_name,
+        )
+        return {"data": result}
+    except Exception as e:
+        msg = str(e)
+        # 常见大数据量错误给更友好的提示
+        low = msg.lower()
+        if "memory" in low or "tmp table" in low or "1046" in msg:
+            raise HTTPException(500, detail=f"数据量过大，数据库临时表/内存不足。建议缩小统计范围或分时段查询。({msg[:150]})")
+        if "lost connection" in low or "timeout" in low or "2013" in msg or "2006" in msg:
+            raise HTTPException(500, detail=f"查询超时（数据量过大）。建议缩小统计范围或分时段查询。({msg[:150]})")
+        raise HTTPException(500, detail=f"统计查询失败: {msg[:300]}")
 
 
 @router.get("/distinct")

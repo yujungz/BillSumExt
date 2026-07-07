@@ -434,6 +434,9 @@ async function doQuery() {
     statsData.value = rows
     // 查询成功后保存当前统计粒度选择
     try { localStorage.setItem(STATS_GROUP_KEY, JSON.stringify(form.group_by)) } catch { /* ignore */ }
+  } catch (e) {
+    statsData.value = []
+    ElMessage.error('查询失败: ' + (e.response?.data?.detail || e.message))
   } finally {
     loading.value = false
   }
