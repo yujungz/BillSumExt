@@ -83,7 +83,8 @@
         </div>
 
         <div ref="tableWrapper" class="table-wrapper">
-          <el-table :data="pagedData" border stripe :height="tableHeight" v-loading="loading" style="width: 100%"
+          <el-table :data="pagedData" border stripe :height="tableHeight" v-loading="loading"
+            :element-loading-text="statsLoadingText || '加载中'" style="width: 100%"
             show-summary :summary-method="getSummary">
             <el-table-column v-for="col in resultColumns" :key="col.key" :prop="col.key" :label="col.label"
               :width="col.width" :formatter="col.formatter" show-overflow-tooltip />
@@ -134,8 +135,10 @@ const exportLoading = ref(false)
 const page = ref(1)
 const pageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
 const exportTimerText = ref('')
+const statsLoadingText = ref('')
 const showChannelName = ref(false)
 const showLogDetail = ref(false)
+let _queryGen = 0
 
 const exportFields = computed(() => {
   if (!allColumns.length) return []
@@ -402,8 +405,11 @@ async function doQuery() {
     ElMessage.warning('请选择日志表')
     return
   }
+  // gen 序号：连续查询时旧查询自动作废，只显示最新结果
+  const gen = ++_queryGen
   loading.value = true
   page.value = 1
+  statsLoadingText.value = '查询中...'
   try {
     const filters = {}
     if (form.filters.username) filters.username = form.filters.username
@@ -415,7 +421,8 @@ async function doQuery() {
     if (form.date_start) filters.date_start = form.date_start
     if (form.date_end) filters.date_end = form.date_end
 
-    const { data } = await api.stats.query({
+    // 提交后台异步查询，拿 task_id
+    const { data: td } = await api.stats.queryAsync({
       site: form.site,
       table_name: form.table_name,
       group_by: form.group_by,
@@ -423,7 +430,25 @@ async function doQuery() {
       show_zero: form.show_zero,
       show_channel_name: showChannelName.value,
     })
-    const rows = data.data || []
+
+    // 轮询状态，直到 done/failed 或被新查询取代
+    let rows = null
+    while (gen === _queryGen) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (gen !== _queryGen) return  // 已被更新的查询取代，丢弃本次
+      const { data: st } = await api.stats.queryStatus(td.task_id)
+      if (st.status === 'done') {
+        const { data: rd } = await api.stats.queryResult(td.task_id)
+        rows = rd.data || []
+        break
+      }
+      if (st.status === 'failed') {
+        throw new Error(st.error || '查询失败')
+      }
+      statsLoadingText.value = `查询中... ${st.elapsed}s`
+    }
+    if (rows === null || gen !== _queryGen) return  // 被取消/取代
+
     if (form.desc_order) {
       const dateKey = form.group_by.includes('day') ? 'period_day' : 'period_month'
       rows.sort((a, b) => {
@@ -432,13 +457,17 @@ async function doQuery() {
       })
     }
     statsData.value = rows
-    // 查询成功后保存当前统计粒度选择
     try { localStorage.setItem(STATS_GROUP_KEY, JSON.stringify(form.group_by)) } catch { /* ignore */ }
   } catch (e) {
+    if (gen !== _queryGen) return
     statsData.value = []
     ElMessage.error('查询失败: ' + (e.response?.data?.detail || e.message))
   } finally {
-    loading.value = false
+    // 只有最新一次查询才复位 loading；被取代的旧查询不动
+    if (gen === _queryGen) {
+      loading.value = false
+      statsLoadingText.value = ''
+    }
   }
 }
 

@@ -1,5 +1,6 @@
 """Statistics API."""
 
+import asyncio
 import io
 import json
 import logging
@@ -324,6 +325,72 @@ async def query_stats(req: StatsRequest):
         if "lost connection" in low or "timeout" in low or "2013" in msg or "2006" in msg:
             raise HTTPException(500, detail=f"查询超时（数据量过大）。建议缩小统计范围或分时段查询。({msg[:150]})")
         raise HTTPException(500, detail=f"统计查询失败: {msg[:300]}")
+
+
+# ── 异步统计查询(大数据量) ──
+# 后台跑聚合，前端轮询进度，避免同步长连接超时导致"暂无数据"
+_STATS_QUERY_TASKS: dict[str, dict] = {}
+_STATS_QUERY_TTL = 3600  # 结果在内存保留 1 小时
+
+
+@router.post("/query-async")
+async def query_stats_async(req: StatsRequest):
+    """启动后台统计查询，立即返回 task_id。"""
+    _gc_stats_query_tasks()
+    task_id = uuid.uuid4().hex[:8]
+    _STATS_QUERY_TASKS[task_id] = {
+        "status": "running", "result": None, "error": None,
+        "start": time.time(), "end": None,
+    }
+
+    async def _run():
+        try:
+            result = await stats_service.query_stats(
+                req.site, req.table_name, req.group_by, req.filters, req.show_zero,
+                show_channel_name=req.show_channel_name,
+            )
+            _STATS_QUERY_TASKS[task_id]["result"] = result
+            _STATS_QUERY_TASKS[task_id]["status"] = "done"
+        except Exception as e:
+            msg = str(e)
+            _STATS_QUERY_TASKS[task_id]["status"] = "failed"
+            _STATS_QUERY_TASKS[task_id]["error"] = f"统计查询失败: {msg[:300]}"
+        finally:
+            _STATS_QUERY_TASKS[task_id]["end"] = time.time()
+
+    asyncio.create_task(_run())
+    return {"task_id": task_id}
+
+
+@router.get("/query-status")
+async def query_stats_status(task_id: str = Query(...)):
+    t = _STATS_QUERY_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    elapsed = (t["end"] or time.time()) - t["start"]
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+
+
+@router.get("/query-result")
+async def query_stats_result(task_id: str = Query(...)):
+    t = _STATS_QUERY_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    if t["status"] != "done":
+        raise HTTPException(400, detail="结果未就绪")
+    rows = t["result"]
+    # 取走即清，避免内存堆积
+    _STATS_QUERY_TASKS.pop(task_id, None)
+    return {"data": rows}
+
+
+def _gc_stats_query_tasks():
+    """清理超过 TTL 的任务，防内存泄漏。"""
+    now = time.time()
+    expired = [k for k, v in _STATS_QUERY_TASKS.items()
+               if v["end"] and now - v["end"] > _STATS_QUERY_TTL]
+    for k in expired:
+        _STATS_QUERY_TASKS.pop(k, None)
 
 
 @router.get("/distinct")
