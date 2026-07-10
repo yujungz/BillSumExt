@@ -54,7 +54,7 @@
             <el-table-column label="操作" width="220" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="openEditDialog(row)">编辑</el-button>
-                <el-button type="warning" link size="small" @click="openChangePwd(row)">改密码</el-button>
+                <el-button type="warning" link size="small" @click="openChangePwd(row)">密码</el-button>
                 <el-button type="danger" link size="small" :disabled="isProtected(row.username)" @click="doDelete(row)">删除</el-button>
               </template>
             </el-table-column>
