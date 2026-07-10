@@ -51,9 +51,10 @@
             <el-table-column label="姓名" prop="name" width="100" />
             <el-table-column label="联系方式" prop="contact" width="160" />
             <el-table-column label="备注" min-width="200" prop="notes" show-overflow-tooltip />
-            <el-table-column label="操作" width="160" fixed="right">
+            <el-table-column label="操作" width="220" fixed="right">
               <template #default="{ row }">
                 <el-button type="primary" link size="small" @click="openEditDialog(row)">编辑</el-button>
+                <el-button type="warning" link size="small" @click="openChangePwd(row)">改密码</el-button>
                 <el-button type="danger" link size="small" :disabled="isProtected(row.username)" @click="doDelete(row)">删除</el-button>
               </template>
             </el-table-column>
@@ -152,6 +153,22 @@
       <template #footer>
         <el-button @click="userDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="userSaving" @click="saveUser">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- ══ 改密码对话框（admin 可改任何管理员密码） ══ -->
+    <el-dialog v-model="pwdDialogVisible" :title="`修改密码 — ${pwdForm.username}`" width="400px" :close-on-click-modal="false">
+      <el-form ref="pwdFormRef" :model="pwdForm" :rules="pwdRules" label-width="80px">
+        <el-form-item label="新密码" prop="password">
+          <el-input v-model="pwdForm.password" type="password" show-password placeholder="至少4位" />
+        </el-form-item>
+        <el-form-item label="确认密码" prop="confirm">
+          <el-input v-model="pwdForm.confirm" type="password" show-password placeholder="再次输入新密码" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="pwdDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="pwdSaving" @click="saveChangePwd">保存</el-button>
       </template>
     </el-dialog>
   </div>
@@ -323,6 +340,47 @@ async function doDelete(row) {
     await loadUsers()
   } catch (e) {
     ElMessage.error(e.response?.data?.detail || '删除失败')
+  }
+}
+
+// ── 改密码（admin 可改任何管理员密码） ──
+const pwdDialogVisible = ref(false)
+const pwdSaving = ref(false)
+const pwdFormRef = ref(null)
+const pwdForm = reactive({ username: '', password: '', confirm: '' })
+const pwdRules = {
+  password: [
+    { required: true, message: '请输入新密码', trigger: 'blur' },
+    { min: 4, message: '密码至少4位', trigger: 'blur' },
+  ],
+  confirm: [
+    { required: true, message: '请确认密码', trigger: 'blur' },
+    {
+      validator: (rule, val, cb) => val === pwdForm.password ? cb() : cb(new Error('两次密码不一致')),
+      trigger: 'blur',
+    },
+  ],
+}
+
+function openChangePwd(row) {
+  pwdForm.username = row.username
+  pwdForm.password = ''
+  pwdForm.confirm = ''
+  pwdDialogVisible.value = true
+}
+
+async function saveChangePwd() {
+  const valid = await pwdFormRef.value.validate().catch(() => false)
+  if (!valid) return
+  pwdSaving.value = true
+  try {
+    await api.system.updatePassword(pwdForm.username, { password: pwdForm.password })
+    ElMessage.success(`已修改 ${pwdForm.username} 的密码`)
+    pwdDialogVisible.value = false
+  } catch (e) {
+    ElMessage.error(e.response?.data?.detail || '修改失败')
+  } finally {
+    pwdSaving.value = false
   }
 }
 
