@@ -458,6 +458,65 @@ async def site_report_preview(
     return await finance_service.site_report_preview(site, table, date_start, date_end)
 
 
+# ── 站点月报查询异步化(大数据量) ──
+_SR_PREVIEW_TASKS: dict[str, dict] = {}
+_SR_PREVIEW_TTL = 3600
+
+
+def _gc_sr_preview_tasks():
+    now = time.time()
+    expired = [k for k, v in _SR_PREVIEW_TASKS.items() if v["end"] and now - v["end"] > _SR_PREVIEW_TTL]
+    for k in expired:
+        _SR_PREVIEW_TASKS.pop(k, None)
+
+
+@router.post("/site-report/preview-async")
+async def site_report_preview_async(body: dict):
+    _gc_sr_preview_tasks()
+    task_id = uuid.uuid4().hex[:8]
+    _SR_PREVIEW_TASKS[task_id] = {"status": "running", "result": None, "error": None,
+                                  "start": time.time(), "end": None}
+    site = body.get("site", "")
+    table = body.get("table", "")
+    date_start = body.get("date_start", "")
+    date_end = body.get("date_end", "")
+
+    async def _run():
+        try:
+            result = await finance_service.site_report_preview(site, table, date_start, date_end)
+            _SR_PREVIEW_TASKS[task_id]["result"] = result
+            _SR_PREVIEW_TASKS[task_id]["status"] = "done"
+        except Exception as e:
+            _SR_PREVIEW_TASKS[task_id]["status"] = "failed"
+            _SR_PREVIEW_TASKS[task_id]["error"] = f"查询失败: {str(e)[:300]}"
+        finally:
+            _SR_PREVIEW_TASKS[task_id]["end"] = time.time()
+
+    asyncio.create_task(_run())
+    return {"task_id": task_id}
+
+
+@router.get("/site-report/preview-status")
+async def site_report_preview_status(task_id: str = Query(...)):
+    t = _SR_PREVIEW_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    elapsed = (t["end"] or time.time()) - t["start"]
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+
+
+@router.get("/site-report/preview-result")
+async def site_report_preview_result(task_id: str = Query(...)):
+    t = _SR_PREVIEW_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    if t["status"] != "done":
+        raise HTTPException(400, detail="结果未就绪")
+    result = t["result"]
+    _SR_PREVIEW_TASKS.pop(task_id, None)
+    return result
+
+
 @router.post("/site-report/generate")
 async def site_report_generate(body: dict):
     site = body.get("site")

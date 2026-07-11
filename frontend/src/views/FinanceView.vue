@@ -161,6 +161,7 @@
               </el-form-item>
               <el-form-item>
                 <el-button type="primary" :loading="srLoading" @click="doSrPreview">查询</el-button>
+                <span v-if="srPreviewText" class="export-timer">{{ srPreviewText }}</span>
                 <el-button type="success" :loading="srGenerating" @click="doSrGenerate">导出</el-button>
                 <span v-if="srGenText" class="export-timer">{{ srGenText }}</span>
                 <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
@@ -1020,6 +1021,8 @@ const srLoading = ref(false)
 const srGenerating = ref(false)
 const srGenText = ref('')
 let _srGen = 0
+const srPreviewText = ref('')
+let _srPreviewGen = 0
 
 const srForm = reactive({
   site: 'pinova',
@@ -1060,24 +1063,43 @@ async function onSrTableChange(table) {
 
 async function doSrPreview() {
   if (!srForm.table) { ElMessage.warning('请选择日志表'); return }
-
+  // 站点月报查询(预览)大数据量, 走异步(后台查询+轮询)
+  const gen = ++_srPreviewGen
   srLoading.value = true
   srGenerated.total_files = 0
   srGenerated.files = []
+  srPreviewText.value = '查询中...'
   const t0 = Date.now()
   try {
     const params = { site: srForm.site, table: srForm.table }
     if (srForm.dateStart) params.date_start = srForm.dateStart
     if (srForm.dateEnd) params.date_end = srForm.dateEnd
-    const { data } = await api.finance.siteReportPreview(params)
-    srPreview.purchase = data.purchase || []
-    srPreview.sales = data.sales || []
+    const { data: td } = await api.finance.siteReportPreviewAsync(params)
+    let result = null
+    while (gen === _srPreviewGen) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (gen !== _srPreviewGen) return
+      const { data: st } = await api.finance.siteReportPreviewStatus(td.task_id)
+      if (st.status === 'done') {
+        result = (await api.finance.siteReportPreviewResult(td.task_id)).data
+        break
+      }
+      if (st.status === 'failed') throw new Error(st.error || '查询失败')
+      srPreviewText.value = `查询中... ${st.elapsed}s`
+    }
+    if (!result || gen !== _srPreviewGen) return
+    srPreview.purchase = result.purchase || []
+    srPreview.sales = result.sales || []
     financeQueryElapsed.value = ((Date.now() - t0) / 1000).toFixed(1)
   } catch (e) {
+    if (gen !== _srPreviewGen) return
     const msg = e.response?.data?.detail || e.message
     ElMessage.error(msg)
   } finally {
-    srLoading.value = false
+    if (gen === _srPreviewGen) {
+      srLoading.value = false
+      srPreviewText.value = ''
+    }
   }
 }
 
