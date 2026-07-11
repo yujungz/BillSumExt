@@ -1,7 +1,10 @@
 <template>
   <div class="finance-view">
     <el-card>
-      <template #header><span class="card-title">财务报表</span></template>
+      <template #header>
+        <span class="card-title">财务报表</span>
+        <span v-if="financeQueryElapsed != null" class="query-elapsed">查询耗时 {{ financeQueryElapsed }}s</span>
+      </template>
       <el-tabs v-model="activeTab" class="finance-tabs">
         <!-- Tab 1: 供应商对账 -->
         <el-tab-pane label="供应商对账" name="supplier">
@@ -268,6 +271,7 @@ const supplierData = ref([])
 const supplierLoading = ref(false)
 const supplierLoadingText = ref('')
 let _supplierGen = 0
+const financeQueryElapsed = ref(null)
 const exportLoading = ref(false)
 
 const supplierForm = reactive({
@@ -382,6 +386,7 @@ async function doSupplierQuery() {
   if (!supplierForm.table) { ElMessage.warning('请选择日志表'); return }
   // username 为空 = 全部(默认)。选全部时数据量大，走异步轮询；单用户同步
   const gen = ++_supplierGen
+  const t0 = Date.now()
   supplierLoading.value = true
   supplierLoadingText.value = '查询中...'
   try {
@@ -417,6 +422,7 @@ async function doSupplierQuery() {
       const { data } = await api.finance.supplier(params)
       supplierData.value = data.rows || []
     }
+    financeQueryElapsed.value = ((Date.now() - t0) / 1000).toFixed(1)
   } catch (e) {
     if (gen !== _supplierGen) return
     supplierData.value = []
@@ -728,6 +734,7 @@ async function doUserStatsQuery() {
   if (!userStatsForm.table) { ElMessage.warning('请选择日志表'); return }
 
   userStatsLoading.value = true
+  const t0 = Date.now()
   try {
     const params = {
       site: userStatsForm.site,
@@ -754,6 +761,7 @@ async function doUserStatsQuery() {
       }
       await loadUserStatsDetail()
     }
+    financeQueryElapsed.value = ((Date.now() - t0) / 1000).toFixed(1)
   } catch (e) {
     const msg = e.response?.data?.detail || e.message || '查询失败'
     ElMessage.error(msg)
@@ -1029,6 +1037,7 @@ async function doSrPreview() {
   srLoading.value = true
   srGenerated.total_files = 0
   srGenerated.files = []
+  const t0 = Date.now()
   try {
     const params = { site: srForm.site, table: srForm.table }
     if (srForm.dateStart) params.date_start = srForm.dateStart
@@ -1036,6 +1045,7 @@ async function doSrPreview() {
     const { data } = await api.finance.siteReportPreview(params)
     srPreview.purchase = data.purchase || []
     srPreview.sales = data.sales || []
+    financeQueryElapsed.value = ((Date.now() - t0) / 1000).toFixed(1)
   } catch (e) {
     const msg = e.response?.data?.detail || e.message
     ElMessage.error(msg)
@@ -1233,6 +1243,7 @@ function _logExport(moduleName, detail) {
 <style scoped>
 .finance-view { width: 100%; }
 .card-title { font-size: 16px; font-weight: bold; }
+.query-elapsed { margin-left: 16px; color: #67c23a; font-size: 13px; font-weight: 500; }
 .finance-tabs { height: 100%; display: flex; flex-direction: column; }
 .finance-tabs :deep(.el-tabs__content) { flex: 1; min-height: 0; overflow: auto; }
 .finance-tabs :deep(.el-tab-pane) { height: 100%; }
