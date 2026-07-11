@@ -454,8 +454,9 @@ async def site_report_preview(
     table: str = Query(...),
     date_start: str = Query(""),
     date_end: str = Query(""),
+    quota_type: str = Query("platform"),
 ):
-    return await finance_service.site_report_preview(site, table, date_start, date_end)
+    return await finance_service.site_report_preview(site, table, date_start, date_end, quota_type)
 
 
 # ── 站点月报查询异步化(大数据量) ──
@@ -480,10 +481,11 @@ async def site_report_preview_async(body: dict):
     table = body.get("table", "")
     date_start = body.get("date_start", "")
     date_end = body.get("date_end", "")
+    quota_type = body.get("quota_type", "platform")
 
     async def _run():
         try:
-            result = await finance_service.site_report_preview(site, table, date_start, date_end)
+            result = await finance_service.site_report_preview(site, table, date_start, date_end, quota_type)
             _SR_PREVIEW_TASKS[task_id]["result"] = result
             _SR_PREVIEW_TASKS[task_id]["status"] = "done"
         except Exception as e:

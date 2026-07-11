@@ -683,6 +683,7 @@ END"""
 _1H = "CASE WHEN l.cache_creation_tokens - l.cache_creation_tokens_5m > 0 THEN l.cache_creation_tokens - l.cache_creation_tokens_5m ELSE 0 END"
 _GR = "GREATEST(l.cache_creation_tokens, l.cache_creation_tokens_5m)"
 _COST_EXPR = "l.group_ratio*l.model_ratio*2*(l.prompt_tokens+l.completion_ratio*l.completion_tokens+l.cache_ratio*l.cache_tokens+1.25*l.cache_creation_tokens_5m+2.00*"+_1H+")/1000000"
+_COST_EXPR_PLATFORM = "l.quota/500000"
 _US_D = "COALESCE(l.us_discount,0)"
 
 PURCHASE_DETAIL_SQL = f"""
@@ -792,17 +793,17 @@ GROUP BY l.user_id, l.username, l.token_name, l.`group`,
 ORDER BY `日期` DESC
 """
 
-PURCHASE_OVERVIEW_SQL = f"""
+PURCHASE_OVERVIEW_SQL = """
 SELECT
   l.cn_buyer1 AS `采购员`,
   COUNT(DISTINCT l.cn_supplier1) AS `供应商数`,
   COUNT(*) AS `记录数`,
-  ROUND(SUM({_COST_EXPR}), 6) AS `消费额度`,
-  ROUND(SUM({_US_D}*{_COST_EXPR}), 6) AS `收入`,
-  ROUND(SUM({{cn_discount}}*{_COST_EXPR}), 6) AS `成本`,
-  ROUND(SUM({_US_D}*{_COST_EXPR}) - SUM({{cn_discount}}*{_COST_EXPR}), 6) AS `毛利`,
-  ROUND({{purchase_rate}}*(SUM({_US_D}*{_COST_EXPR}) - SUM({{cn_discount}}*{_COST_EXPR})), 6) AS `采购提成`
-FROM `{{table}}` l
+  ROUND(SUM({cost_expr}), 6) AS `{quota_label}`,
+  ROUND(SUM({us_d}*{cost_expr}), 6) AS `收入`,
+  ROUND(SUM({cn_discount}*{cost_expr}), 6) AS `成本`,
+  ROUND(SUM({us_d}*{cost_expr}) - SUM({cn_discount}*{cost_expr}), 6) AS `毛利`,
+  ROUND({purchase_rate}*(SUM({us_d}*{cost_expr}) - SUM({cn_discount}*{cost_expr})), 6) AS `采购提成`
+FROM `{table}` l
 WHERE l.windup_type < 2
   AND l.cn_buyer1 IS NOT NULL AND l.cn_buyer1 != ''
   AND l.created_at>=UNIX_TIMESTAMP(%s)-28800
@@ -810,17 +811,17 @@ WHERE l.windup_type < 2
 GROUP BY l.cn_buyer1
 """
 
-SALES_OVERVIEW_SQL = f"""
+SALES_OVERVIEW_SQL = """
 SELECT
   l.us_salesperson AS `销售员`,
   COUNT(DISTINCT l.username) AS `用户数`,
   COUNT(*) AS `记录数`,
-  ROUND(SUM({_COST_EXPR}), 6) AS `消费额度`,
-  ROUND(SUM({_US_D}*{_COST_EXPR}), 6) AS `收入`,
-  ROUND(SUM({{cn_discount}}*{_COST_EXPR}), 6) AS `成本`,
-  ROUND(SUM({_US_D}*{_COST_EXPR}) - SUM({{cn_discount}}*{_COST_EXPR}), 6) AS `毛利`,
-  ROUND({{sales_rate}}*(SUM({_US_D}*{_COST_EXPR}) - SUM({{cn_discount}}*{_COST_EXPR})), 6) AS `提成`
-FROM `{{table}}` l
+  ROUND(SUM({cost_expr}), 6) AS `{quota_label}`,
+  ROUND(SUM({us_d}*{cost_expr}), 6) AS `收入`,
+  ROUND(SUM({cn_discount}*{cost_expr}), 6) AS `成本`,
+  ROUND(SUM({us_d}*{cost_expr}) - SUM({cn_discount}*{cost_expr}), 6) AS `毛利`,
+  ROUND({sales_rate}*(SUM({us_d}*{cost_expr}) - SUM({cn_discount}*{cost_expr})), 6) AS `提成`
+FROM `{table}` l
 WHERE l.windup_type < 2
   AND l.us_salesperson IS NOT NULL AND l.us_salesperson != ''
   AND l.created_at>=UNIX_TIMESTAMP(%s)-28800
@@ -946,25 +947,31 @@ def _excel_bytes(headers: list[str], rows: list[dict],
     return buf.getvalue()
 
 
-async def site_report_preview(site: str, table: str, date_start: str, date_end: str) -> dict:
+async def site_report_preview(site: str, table: str, date_start: str, date_end: str,
+                              quota_type: str = "platform") -> dict:
+    """quota_type: 'platform' → 平台额度(quota/500000, 默认); 'total_cost' → 消费额度"""
     config = AppConfig.load()
     db_name = config.db_name(site)
     ds = f"{date_start} 00:00:00"
     de = f"{date_end} 23:59:59"
     purchase_rate, sales_rate = _get_commission_rates()
 
+    cost_expr = _COST_EXPR_PLATFORM if quota_type == "platform" else _COST_EXPR
+    quota_label = "平台额度" if quota_type == "platform" else "消费额度"
+    fmt = dict(table=table, cost_expr=cost_expr, quota_label=quota_label,
+               us_d=_US_D, cn_discount=CN_DISCOUNT_EXPR,
+               purchase_rate=purchase_rate, sales_rate=sales_rate)
+
     purchase, sales = [], []
     try:
         purchase = await db.fetch_all(
-            PURCHASE_OVERVIEW_SQL.format(table=table, purchase_rate=purchase_rate, cn_discount=CN_DISCOUNT_EXPR),
-            (ds, de), db=db_name,
+            PURCHASE_OVERVIEW_SQL.format(**fmt), (ds, de), db=db_name,
         )
     except Exception:
         pass
     try:
         sales = await db.fetch_all(
-            SALES_OVERVIEW_SQL.format(table=table, sales_rate=sales_rate, cn_discount=CN_DISCOUNT_EXPR),
-            (ds, de), db=db_name,
+            SALES_OVERVIEW_SQL.format(**fmt), (ds, de), db=db_name,
         )
     except Exception:
         pass

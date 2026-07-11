@@ -153,6 +153,12 @@
                   <el-option v-for="t in srLogTables" :key="t" :label="t" :value="t" />
                 </el-select>
               </el-form-item>
+              <el-form-item label="额度类型">
+                <el-select v-model="srForm.quotaType" style="width: 140px">
+                  <el-option label="平台额度" value="platform" />
+                  <el-option label="消费额度" value="total_cost" />
+                </el-select>
+              </el-form-item>
               <el-form-item label="起始日期">
                 <el-date-picker v-model="srForm.dateStart" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
               </el-form-item>
@@ -175,7 +181,7 @@
                   <el-table-column prop="采购员" label="采购员" width="100" />
                   <el-table-column prop="供应商数" label="供应商数" width="100" />
                   <el-table-column prop="记录数" label="记录数" width="100" :formatter="fmtInt" />
-                  <el-table-column prop="消费额度" label="消费额度" width="120" :formatter="fmt4" />
+                  <el-table-column :prop="srQuotaKey" :label="srQuotaKey" width="120" :formatter="fmt4" />
                   <el-table-column prop="收入" label="收入" width="120" :formatter="fmt4" />
                   <el-table-column prop="成本" label="成本" width="120" :formatter="fmt4" />
                   <el-table-column prop="毛利" label="毛利" width="120" :formatter="fmt4" />
@@ -189,7 +195,7 @@
                   <el-table-column prop="销售员" label="销售员" width="100" />
                   <el-table-column prop="用户数" label="用户数" width="100" />
                   <el-table-column prop="记录数" label="记录数" width="100" :formatter="fmtInt" />
-                  <el-table-column prop="消费额度" label="消费额度" width="120" :formatter="fmt4" />
+                  <el-table-column :prop="srQuotaKey" :label="srQuotaKey" width="120" :formatter="fmt4" />
                   <el-table-column prop="收入" label="收入" width="120" :formatter="fmt4" />
                   <el-table-column prop="成本" label="成本" width="120" :formatter="fmt4" />
                   <el-table-column prop="毛利" label="毛利" width="120" :formatter="fmt4" />
@@ -1029,7 +1035,9 @@ const srForm = reactive({
   table: '',
   dateStart: '',
   dateEnd: '',
+  quotaType: 'platform',
 })
+const srQuotaKey = computed(() => srForm.quotaType === 'platform' ? '平台额度' : '消费额度')
 
 const srPreview = reactive({
   purchase: [],
@@ -1071,7 +1079,7 @@ async function doSrPreview() {
   srPreviewText.value = '查询中...'
   const t0 = Date.now()
   try {
-    const params = { site: srForm.site, table: srForm.table }
+    const params = { site: srForm.site, table: srForm.table, quota_type: srForm.quotaType }
     if (srForm.dateStart) params.date_start = srForm.dateStart
     if (srForm.dateEnd) params.date_end = srForm.dateEnd
     const { data: td } = await api.finance.siteReportPreviewAsync(params)
