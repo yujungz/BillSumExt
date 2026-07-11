@@ -223,7 +223,7 @@ import api from '../api'
 import PaginationBar from '../components/PaginationBar.vue'
 
 const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
-const activeTab = ref('supplier')
+const activeTab = ref('userStats')
 
 // ── Shared formatters ──
 
