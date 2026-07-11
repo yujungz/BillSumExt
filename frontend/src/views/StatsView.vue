@@ -1,7 +1,10 @@
 <template>
   <div class="stats-view">
     <el-card>
-      <template #header><span class="card-title">数据统计</span></template>
+      <template #header>
+        <span class="card-title">数据统计</span>
+        <span v-if="queryElapsed != null" class="query-elapsed">查询耗时 {{ queryElapsed }}s</span>
+      </template>
       <div class="stats-layout">
         <el-form :model="form" label-width="100px" inline>
           <el-form-item label="站点">
@@ -136,6 +139,7 @@ const page = ref(1)
 const pageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
 const exportTimerText = ref('')
 const statsLoadingText = ref('')
+const queryElapsed = ref(null)
 const showChannelName = ref(false)
 const showLogDetail = ref(false)
 let _queryGen = 0
@@ -438,6 +442,7 @@ async function doQuery() {
       if (gen !== _queryGen) return  // 已被更新的查询取代，丢弃本次
       const { data: st } = await api.stats.queryStatus(td.task_id)
       if (st.status === 'done') {
+        queryElapsed.value = st.elapsed
         const { data: rd } = await api.stats.queryResult(td.task_id)
         rows = rd.data || []
         break
@@ -644,6 +649,12 @@ function _logExport(detail) {
 <style scoped>
 .stats-view { width: 100%; }
 .card-title { font-size: 16px; font-weight: bold; }
+.query-elapsed {
+  margin-left: 16px;
+  color: #67c23a;
+  font-size: 13px;
+  font-weight: 500;
+}
 .stats-layout {
   display: flex;
   flex-direction: column;
