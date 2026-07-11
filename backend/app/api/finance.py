@@ -203,6 +203,75 @@ async def user_stats(
         raise HTTPException(500, detail=str(e))
 
 
+# ── 用户统计异步查询(大数据量) ──
+_USER_STATS_QUERY_TASKS: dict[str, dict] = {}
+_USER_STATS_QUERY_TTL = 3600
+
+
+def _gc_user_stats_query_tasks():
+    now = time.time()
+    expired = [k for k, v in _USER_STATS_QUERY_TASKS.items() if v["end"] and now - v["end"] > _USER_STATS_QUERY_TTL]
+    for k in expired:
+        _USER_STATS_QUERY_TASKS.pop(k, None)
+
+
+@router.post("/user-stats/query-async")
+async def user_stats_query_async(body: dict):
+    _gc_user_stats_query_tasks()
+    task_id = uuid.uuid4().hex[:8]
+    _USER_STATS_QUERY_TASKS[task_id] = {"status": "running", "result": None, "error": None,
+                                        "start": time.time(), "end": None}
+    site = body.get("site", "")
+    table = body.get("table", "")
+    username = body.get("username", "")
+    date_start = body.get("date_start", "")
+    date_end = body.get("date_end", "")
+    granularity = body.get("granularity", "")
+    with_platform = body.get("with_platform", False)
+    with_total_cost = body.get("with_total_cost", False)
+    monthly_settle = body.get("monthly_settle", False)
+
+    async def _run():
+        try:
+            glist = [x.strip() for x in granularity.split(",") if x.strip()] if granularity else []
+            show_model = "model" in glist
+            show_token = "token" in glist
+            monthly = await finance_service.user_monthly(site, table, username, date_start, date_end,
+                                                         show_model, with_platform, with_total_cost, monthly_settle)
+            daily = await finance_service.user_daily(site, table, username, date_start, date_end, show_model, show_token)
+            _USER_STATS_QUERY_TASKS[task_id]["result"] = {"monthly": monthly, "daily": daily}
+            _USER_STATS_QUERY_TASKS[task_id]["status"] = "done"
+        except Exception as e:
+            _USER_STATS_QUERY_TASKS[task_id]["status"] = "failed"
+            _USER_STATS_QUERY_TASKS[task_id]["error"] = f"查询失败: {str(e)[:300]}"
+        finally:
+            _USER_STATS_QUERY_TASKS[task_id]["end"] = time.time()
+
+    asyncio.create_task(_run())
+    return {"task_id": task_id}
+
+
+@router.get("/user-stats/query-status")
+async def user_stats_query_status(task_id: str = Query(...)):
+    t = _USER_STATS_QUERY_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    elapsed = (t["end"] or time.time()) - t["start"]
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+
+
+@router.get("/user-stats/query-result")
+async def user_stats_query_result(task_id: str = Query(...)):
+    t = _USER_STATS_QUERY_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    if t["status"] != "done":
+        raise HTTPException(400, detail="结果未就绪")
+    result = t["result"]
+    _USER_STATS_QUERY_TASKS.pop(task_id, None)
+    return result
+
+
 @router.get("/user-stats/detail")
 async def user_stats_detail(
     site: str = Query(...),

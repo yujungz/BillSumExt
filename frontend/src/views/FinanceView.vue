@@ -104,6 +104,7 @@
               <el-tab-pane label="月汇总" name="monthly">
                 <div ref="monthlyTableWrapper" class="table-wrapper sub-table-wrapper">
                   <el-table :data="sortedMonthly" border stripe :height="subTableHeight" v-loading="userStatsLoading"
+                    :element-loading-text="userStatsLoadingText || '加载中'"
                     style="width: 100%" show-overflow-tooltip show-summary :summary-method="userStatsSummary">
                     <el-table-column v-for="col in userStatsMonthlyCols" :key="col.key" :prop="col.key" :label="col.label"
                       :width="col.width" :formatter="col.formatter" />
@@ -272,6 +273,8 @@ const supplierLoading = ref(false)
 const supplierLoadingText = ref('')
 let _supplierGen = 0
 const financeQueryElapsed = ref(null)
+const userStatsLoadingText = ref('')
+let _userStatsGen = 0
 const exportLoading = ref(false)
 
 const supplierForm = reactive({
@@ -732,8 +735,10 @@ async function onUserStatsTableChange(table) {
 
 async function doUserStatsQuery() {
   if (!userStatsForm.table) { ElMessage.warning('请选择日志表'); return }
-
+  // 用户统计多维聚合数据量大, 走异步(后台查询+轮询), 避免同步 Network Error
+  const gen = ++_userStatsGen
   userStatsLoading.value = true
+  userStatsLoadingText.value = '查询中...'
   const t0 = Date.now()
   try {
     const params = {
@@ -747,10 +752,25 @@ async function doUserStatsQuery() {
     }
     if (userStatsForm.dateStart) params.date_start = userStatsForm.dateStart
     if (userStatsForm.dateEnd) params.date_end = userStatsForm.dateEnd
-    const { data } = await api.finance.userStats(params)
+
+    const { data: td } = await api.finance.userStatsQueryAsync(params)
+    let result = null
+    while (gen === _userStatsGen) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (gen !== _userStatsGen) return
+      const { data: st } = await api.finance.userStatsQueryStatus(td.task_id)
+      if (st.status === 'done') {
+        result = (await api.finance.userStatsQueryResult(td.task_id)).data
+        break
+      }
+      if (st.status === 'failed') throw new Error(st.error || '查询失败')
+      userStatsLoadingText.value = `查询中... ${st.elapsed}s`
+    }
+    if (!result || gen !== _userStatsGen) return
+
     saveGranularity()
-    userStatsMonthly.value = data.monthly || []
-    userStatsDaily.value = data.daily || []
+    userStatsMonthly.value = result.monthly || []
+    userStatsDaily.value = result.daily || []
     userStatsDetailTotal.value = 0
     userStatsDetail.value = []
     userStatsDetailTotals.value = {}
@@ -763,10 +783,14 @@ async function doUserStatsQuery() {
     }
     financeQueryElapsed.value = ((Date.now() - t0) / 1000).toFixed(1)
   } catch (e) {
+    if (gen !== _userStatsGen) return
     const msg = e.response?.data?.detail || e.message || '查询失败'
     ElMessage.error(msg)
   } finally {
-    userStatsLoading.value = false
+    if (gen === _userStatsGen) {
+      userStatsLoading.value = false
+      userStatsLoadingText.value = ''
+    }
   }
 }
 
