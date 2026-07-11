@@ -492,3 +492,70 @@ async def site_report_generate_zip(body: dict):
         media_type="application/zip",
         headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
+
+
+# ── 站点月报异步生成(大数据量, 避免同步长连接超时) ──
+_SR_ZIP_TASKS: dict[str, dict] = {}
+_SR_ZIP_TTL = 3600
+
+
+def _gc_sr_zip_tasks():
+    now = time.time()
+    expired = [k for k, v in _SR_ZIP_TASKS.items() if v["end"] and now - v["end"] > _SR_ZIP_TTL]
+    for k in expired:
+        _SR_ZIP_TASKS.pop(k, None)
+
+
+@router.post("/site-report/generate-zip-async")
+async def site_report_generate_zip_async(body: dict):
+    _gc_sr_zip_tasks()
+    site = body.get("site")
+    table = body.get("table")
+    date_start = body.get("date_start")
+    date_end = body.get("date_end")
+    if not all([site, table, date_start, date_end]):
+        raise HTTPException(400, detail="参数不完整")
+    task_id = uuid.uuid4().hex[:8]
+    _SR_ZIP_TASKS[task_id] = {"status": "running", "zip": None, "error": None, "filename": None,
+                              "start": time.time(), "end": None}
+
+    async def _run():
+        try:
+            zip_bytes = await finance_service.generate_reports_zip(site, table, date_start, date_end)
+            _SR_ZIP_TASKS[task_id]["zip"] = zip_bytes
+            _SR_ZIP_TASKS[task_id]["filename"] = f"{site}_report{date_start.replace('-', '')[:6]}.zip"
+            _SR_ZIP_TASKS[task_id]["status"] = "done"
+        except Exception as e:
+            _SR_ZIP_TASKS[task_id]["status"] = "failed"
+            _SR_ZIP_TASKS[task_id]["error"] = f"生成失败: {str(e)[:300]}"
+        finally:
+            _SR_ZIP_TASKS[task_id]["end"] = time.time()
+
+    asyncio.create_task(_run())
+    return {"task_id": task_id}
+
+
+@router.get("/site-report/generate-zip-status")
+async def site_report_generate_zip_status(task_id: str = Query(...)):
+    t = _SR_ZIP_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    elapsed = (t["end"] or time.time()) - t["start"]
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+
+
+@router.get("/site-report/generate-zip-download")
+async def site_report_generate_zip_download(task_id: str = Query(...)):
+    t = _SR_ZIP_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    if t["status"] != "done":
+        raise HTTPException(400, detail="文件尚未生成完毕")
+    zip_bytes = t["zip"]
+    filename = t["filename"] or "report.zip"
+    _SR_ZIP_TASKS.pop(task_id, None)
+    return Response(
+        content=zip_bytes,
+        media_type="application/zip",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )

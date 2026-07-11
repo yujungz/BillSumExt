@@ -51,6 +51,9 @@ export default {
     siteReportPreview: (params) => api.get('/finance/site-report/preview', { params }),
     siteReportGenerate: (data) => api.post('/finance/site-report/generate', data),
     siteReportZip: (data) => api.post('/finance/site-report/generate-zip', data, { responseType: 'arraybuffer' }),
+    siteReportZipAsync: (data) => api.post('/finance/site-report/generate-zip-async', data),
+    siteReportZipStatus: (taskId) => api.get('/finance/site-report/generate-zip-status', { params: { task_id: taskId } }),
+    siteReportZipDownload: (taskId) => api.get('/finance/site-report/generate-zip-download', { params: { task_id: taskId }, responseType: 'arraybuffer' }),
   },
 
   // Query

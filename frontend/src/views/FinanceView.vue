@@ -162,6 +162,7 @@
               <el-form-item>
                 <el-button type="primary" :loading="srLoading" @click="doSrPreview">查询</el-button>
                 <el-button type="success" :loading="srGenerating" @click="doSrGenerate">导出</el-button>
+                <span v-if="srGenText" class="export-timer">{{ srGenText }}</span>
                 <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
               </el-form-item>
             </el-form>
@@ -1017,6 +1018,8 @@ function _pollExportTask(taskId, username) {
 const srLogTables = ref([])
 const srLoading = ref(false)
 const srGenerating = ref(false)
+const srGenText = ref('')
+let _srGen = 0
 
 const srForm = reactive({
   site: 'pinova',
@@ -1127,23 +1130,41 @@ async function doSrGenerate() {
     return
   }
 
+  // 异步生成 ZIP(大数据量), 避免同步长连接超时
+  const gen = ++_srGen
   srGenerating.value = true
-  const t0 = startTimer()
+  srGenText.value = '生成中...'
   try {
     const body = { site: srForm.site, table: srForm.table }
     if (srForm.dateStart) body.date_start = srForm.dateStart
     if (srForm.dateEnd) body.date_end = srForm.dateEnd
-    const { data } = await api.finance.siteReportZip(body)
-    await extractZipToDir(data, dirHandle)
+    const { data: td } = await api.finance.siteReportZipAsync(body)
+    let zipData = null
+    while (gen === _srGen) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (gen !== _srGen) return
+      const { data: st } = await api.finance.siteReportZipStatus(td.task_id)
+      if (st.status === 'done') {
+        zipData = (await api.finance.siteReportZipDownload(td.task_id)).data
+        break
+      }
+      if (st.status === 'failed') throw new Error(st.error || '生成失败')
+      srGenText.value = `生成中... ${st.elapsed}s`
+    }
+    if (!zipData || gen !== _srGen) return
+    await extractZipToDir(zipData, dirHandle)
     await _saveDirHandle(dirHandle)
     ElMessage.success('报表已导出到所选文件夹')
     _logExport('财务报表-站点报告', `站点=${srForm.site} 表=${srForm.table} 日期=${srForm.dateStart}~${srForm.dateEnd}`)
   } catch (e) {
+    if (gen !== _srGen) return
     const msg = e.response?.data?.detail || e.message
     ElMessage.error(typeof msg === 'string' ? msg : '导出失败')
   } finally {
-    stopTimer(t0)
-    srGenerating.value = false
+    if (gen === _srGen) {
+      srGenerating.value = false
+      srGenText.value = ''
+    }
   }
 }
 
