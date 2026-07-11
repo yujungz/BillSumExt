@@ -660,6 +660,7 @@ function _logExport(detail) {
 .zero-fee-group { border: 1px solid #dcdfe6; border-radius: 4px; padding: 0 10px; }
 .granularity-group {
   display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  width: fit-content; max-width: 100%;
   border: 1px solid #dcdfe6; border-radius: 4px;
   padding: 6px 12px; margin: 6px 0 10px;
 }
