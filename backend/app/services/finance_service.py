@@ -146,8 +146,15 @@ async def supplier_query(site: str, table: str, username: str,
     supplier_params = [supplier_name] if supplier_name else []
     supplier_group = "" if supplier_name else ", l.cn_supplier1"
     dw, dp = _date_where(date_start, date_end)
+    uw, up = _user_where(username)  # 空 username → 无过滤(全部用户)
+    # 选"全部"时增加用户名维度：SELECT 首列、GROUP BY 最前、ORDER BY 最前
+    is_all = not username
+    user_sel = "l.username AS `用户名`," if is_all else ""
+    user_group = "l.username, " if is_all else ""
+    user_order = "`用户名` ASC, " if is_all else ""
     sql = f"""
     SELECT
+      {user_sel}
       DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%Y-%%m-%%d') AS `日期`,
       l.model_name AS `模型名称`,
       {supplier_col} AS `供应商名称`,
@@ -179,12 +186,11 @@ async def supplier_query(site: str, table: str, username: str,
         +1.25*l.cache_creation_tokens_5m
         +2.00*{_1H_CASE})/1000000 AS DECIMAL(18,6))) AS `总费用（USD）`
     FROM `{table}` l
-    WHERE l.windup_type < 2
-      AND l.username=%s{dw}
-    GROUP BY DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%Y-%%m-%%d'), l.model_name{supplier_group}
-    ORDER BY `日期` DESC, `总费用（USD）` DESC
+    WHERE l.windup_type < 2{uw}{dw}
+    GROUP BY {user_group}DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%Y-%%m-%%d'), l.model_name{supplier_group}
+    ORDER BY {user_order}`日期` DESC, `总费用（USD）` DESC
     """
-    rows = await db.fetch_all(sql, supplier_params + [username] + dp, db=db_name)
+    rows = await db.fetch_all(sql, supplier_params + up + dp, db=db_name)
     return rows
 
 

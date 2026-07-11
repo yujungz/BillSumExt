@@ -1,5 +1,8 @@
 """Finance API - supplier reconciliation, user statistics."""
 
+import asyncio
+import time
+import uuid
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Query
@@ -41,7 +44,7 @@ async def table_dates(table: str = Query(...)):
 async def supplier_query(
     site: str = Query(...),
     table: str = Query(...),
-    username: str = Query(...),
+    username: str = Query(""),
     date_start: str = Query(""),
     date_end: str = Query(""),
     supplier_name: str = Query(""),
@@ -53,11 +56,72 @@ async def supplier_query(
         raise HTTPException(500, detail=str(e))
 
 
+# ── 供应商对账异步查询(全部用户数据量大) ──
+_SUPPLIER_TASKS: dict[str, dict] = {}
+_SUPPLIER_TASK_TTL = 3600
+
+
+def _gc_supplier_tasks():
+    now = time.time()
+    expired = [k for k, v in _SUPPLIER_TASKS.items() if v["end"] and now - v["end"] > _SUPPLIER_TASK_TTL]
+    for k in expired:
+        _SUPPLIER_TASKS.pop(k, None)
+
+
+@router.post("/supplier/query-async")
+async def supplier_query_async(body: dict):
+    _gc_supplier_tasks()
+    task_id = uuid.uuid4().hex[:8]
+    _SUPPLIER_TASKS[task_id] = {"status": "running", "result": None, "error": None,
+                                "start": time.time(), "end": None}
+    site = body.get("site", "")
+    table = body.get("table", "")
+    username = body.get("username", "")
+    date_start = body.get("date_start", "")
+    date_end = body.get("date_end", "")
+    supplier_name = body.get("supplier_name", "")
+
+    async def _run():
+        try:
+            rows = await finance_service.supplier_query(site, table, username, date_start, date_end, supplier_name)
+            _SUPPLIER_TASKS[task_id]["result"] = rows
+            _SUPPLIER_TASKS[task_id]["status"] = "done"
+        except Exception as e:
+            _SUPPLIER_TASKS[task_id]["status"] = "failed"
+            _SUPPLIER_TASKS[task_id]["error"] = f"查询失败: {str(e)[:300]}"
+        finally:
+            _SUPPLIER_TASKS[task_id]["end"] = time.time()
+
+    asyncio.create_task(_run())
+    return {"task_id": task_id}
+
+
+@router.get("/supplier/query-status")
+async def supplier_query_status(task_id: str = Query(...)):
+    t = _SUPPLIER_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    elapsed = (t["end"] or time.time()) - t["start"]
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+
+
+@router.get("/supplier/query-result")
+async def supplier_query_result(task_id: str = Query(...)):
+    t = _SUPPLIER_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    if t["status"] != "done":
+        raise HTTPException(400, detail="结果未就绪")
+    rows = t["result"]
+    _SUPPLIER_TASKS.pop(task_id, None)
+    return {"rows": rows}
+
+
 @router.get("/supplier/export")
 async def supplier_export(
     site: str = Query(...),
     table: str = Query(...),
-    username: str = Query(...),
+    username: str = Query(""),
     date_start: str = Query(""),
     date_end: str = Query(""),
     supplier_name: str = Query(""),
@@ -68,7 +132,8 @@ async def supplier_export(
     content = _build_supplier_excel(rows)
     ds = date_start.replace("-", "")
     de = date_end.replace("-", "")
-    filename = f"supplier{ds}_{de}_{username}.xlsx"
+    who = username or "全部"
+    filename = f"supplier{ds}_{de}_{who}.xlsx"
     return Response(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
