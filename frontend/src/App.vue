@@ -5,7 +5,7 @@
   <!-- ══ Main app layout ══ -->
   <el-container v-else class="app-container">
     <el-aside width="200px" class="app-aside">
-      <div class="app-logo">BillSum</div>
+      <div class="app-logo">BillSumEx</div>
       <el-menu
         :default-active="currentRoute"
         class="app-menu"
