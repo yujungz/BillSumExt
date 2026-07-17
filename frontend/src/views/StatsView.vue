@@ -535,6 +535,8 @@ async function doExport(format = 'xlsx') {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
         })
         if (!r1.ok) throw new Error((await r1.json().catch(() => ({}))).detail || '导出失败')
+        // fetch 耗时后用户激活可能已过期，刷新目录写权限
+        try { await dirHandle.requestPermission({ mode: 'readwrite' }) } catch {}
         const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
         const w1 = await fh1.createWritable()
         await w1.write(await r1.blob())
