@@ -10,6 +10,14 @@
           </el-space>
 
           <el-table :data="binlogs" border stripe style="margin-top: 16px; width: 100%">
+            <el-table-column width="50" align="center">
+              <template #header>
+                <el-checkbox :model-value="allBinlogSelected" @change="(v) => toggleAllBinlog(v)" />
+              </template>
+              <template #default="{ row, $index }">
+                <el-checkbox :model-value="selectedBinlogs.has(row.Log_name)" @change="(v) => toggleBinlogRow($index, v)" />
+              </template>
+            </el-table-column>
             <el-table-column prop="Log_name" label="日志文件" />
             <el-table-column prop="File_size" label="大小(bytes)" :formatter="formatSize" />
             <el-table-column prop="Encrypted" label="加密" width="80" />
@@ -189,16 +197,37 @@ const activeTab = ref('binlog')
 // ── Binlog ──
 const binlogs = ref([])
 const loading = ref(false)
+const selectedBinlogs = ref(new Set())
 const totalSize = computed(() => binlogs.value.reduce((sum, b) => sum + (b.File_size || 0), 0))
+const allBinlogSelected = computed(() =>
+  binlogs.value.length > 0 && selectedBinlogs.value.size === binlogs.value.length)
 
 async function loadBinlog() {
   loading.value = true
   try {
     const { data } = await api.system.binlog()
     binlogs.value = data.binlogs || []
+    // 默认全选
+    selectedBinlogs.value = new Set(binlogs.value.map(b => b.Log_name))
   } finally {
     loading.value = false
   }
+}
+
+// 勾选某行: 该行及之前(更早)的全部选中
+// 取消某行: 该行及之后(更晚)的全部取消
+function toggleBinlogRow(index, checked) {
+  const s = new Set(selectedBinlogs.value)
+  if (checked) {
+    for (let i = 0; i <= index; i++) s.add(binlogs.value[i].Log_name)
+  } else {
+    for (let i = index; i < binlogs.value.length; i++) s.delete(binlogs.value[i].Log_name)
+  }
+  selectedBinlogs.value = s
+}
+
+function toggleAllBinlog(checked) {
+  selectedBinlogs.value = checked ? new Set(binlogs.value.map(b => b.Log_name)) : new Set()
 }
 
 function formatSize(row, col, val) {
@@ -210,9 +239,18 @@ function formatSize(row, col, val) {
 }
 
 async function purgeConfirm() {
-  await ElMessageBox.confirm('确认清除所有 binlog？此操作不可恢复。', '警告',
+  const selectedNames = binlogs.value.filter(b => selectedBinlogs.value.has(b.Log_name)).map(b => b.Log_name)
+  if (!selectedNames.length) {
+    ElMessage.warning('请至少选择一个日志文件')
+    return
+  }
+  // 选中范围是前缀 [0..maxIdx]; PURGE TO 下一个文件清除该前缀; 无下一个则 TO 最后一条(活跃保留)
+  const maxIdx = Math.max(...binlogs.value.filter(b => selectedBinlogs.value.has(b.Log_name)).map(b => binlogs.value.indexOf(b)))
+  const before = binlogs.value[maxIdx + 1]?.Log_name || binlogs.value[maxIdx].Log_name
+  await ElMessageBox.confirm(
+    `确认清除选中的 ${selectedNames.length} 个 binlog（至 ${before}）？此操作不可恢复。`, '警告',
     { confirmButtonText: '确认清除', cancelButtonText: '取消', type: 'warning' })
-  await api.system.purge({})
+  await api.system.purge({ before })
   ElMessage.success('Binlog 已清除')
   await loadBinlog()
 }
