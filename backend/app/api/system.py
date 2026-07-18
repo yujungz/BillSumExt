@@ -38,7 +38,7 @@ async def purge_binlog(req: PurgeRequest):
 
 # ── undo tablespace 管理 ──
 
-_UNDO_NAME_RE = re.compile(r'^innodb_undo_\d+$')
+_UNDO_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]*$')
 
 
 def _validate_undo_name(name: str):
