@@ -101,7 +101,9 @@ async def export_table(
             headers={"Content-Disposition": f"attachment; filename={fn}.csv"},
         )
 
-    # xlsx - openpyxl
+    # xlsx - openpyxl write_only(限制 20 万行, 超过请用 CSV)
+    if len(rows) > 200000:
+        raise HTTPException(400, detail=f"数据量过大（{len(rows)} 行），xlsx 最多导出 20 万行。请用 CSV 格式或缩小筛选范围。")
     content = _build_xlsx(cols, rows)
     return Response(
         content=content,
@@ -135,18 +137,22 @@ def _apply_fields(columns, fields_json):
 def _build_xlsx(columns, rows):
     import openpyxl
     from openpyxl.styles import Font
+    from openpyxl.cell import WriteOnlyCell
     from app.services.excel_util import cell_value
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Data"
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet("Data")
     bold = Font(bold=True)
-    for ci, c in enumerate(columns, 1):
-        ws.cell(row=1, column=ci, value=c['label']).font = bold
-        ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = max(len(str(c['label'])) * 2, 12)
-    for ri, row in enumerate(rows, 2):
-        for ci, c in enumerate(columns, 1):
-            ws.cell(row=ri, column=ci, value=cell_value(row.get(c['name'], '')))
+    # 表头(WriteOnlyCell 支持字体)
+    header = []
+    for c in columns:
+        cell = WriteOnlyCell(ws, value=c['label'])
+        cell.font = bold
+        header.append(cell)
+    ws.append(header)
+    # 数据行(流式 append, 省内存)
+    for row in rows:
+        ws.append([cell_value(row.get(c['name'], '')) for c in columns])
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
