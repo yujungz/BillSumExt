@@ -37,7 +37,9 @@
         <el-card shadow="never" :body-style="{ padding: '20px' }">
           <el-space>
             <el-button type="primary" :loading="undoLoading" @click="loadUndo">刷新</el-button>
+            <el-button type="success" plain @click="createUndoPrompt">新建</el-button>
             <el-button type="warning" :loading="undoPurging" @click="purgeUndoConfirm">清除选中</el-button>
+            <el-button type="danger" plain @click="dropUndoPrompt">删除选中</el-button>
             <span v-if="undoStatusText" class="export-timer">{{ undoStatusText }}</span>
           </el-space>
 
@@ -593,6 +595,37 @@ async function _purgeOneUndo(row) {
   if (!shrunk) {
     ElMessage.warning(`${row.NAME} 收缩可能未完成（仍 ${row.size_mb}MB），已重新激活`)
   }
+}
+
+async function createUndoPrompt() {
+  try {
+    const { value } = await ElMessageBox.prompt('输入新 undo tablespace 名称（如 undo_extra）', '新建 undo tablespace',
+      { inputPlaceholder: 'undo_extra', inputPattern: /^[a-zA-Z_][a-zA-Z0-9_]*$/, inputErrorMessage: '仅字母/数字/下划线' })
+    await api.system.undoCreate({ name: value })
+    ElMessage.success(`已创建 ${value}`)
+    await loadUndo()
+  } catch (e) {
+    if (e === 'cancel' || e?.action === 'cancel') return
+    ElMessage.error(e.response?.data?.detail || e.message || '创建失败')
+  }
+}
+
+async function dropUndoPrompt() {
+  const targets = undoList.value.filter(r => selectedUndo.value.has(r.NAME))
+  if (!targets.length) { ElMessage.warning('请选择要删除的 undo 文件'); return }
+  try {
+    await ElMessageBox.confirm(`确认删除选中的 ${targets.length} 个 undo tablespace？`, '确认',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' })
+    for (const row of targets) {
+      try {
+        await api.system.undoDrop({ name: row.NAME })
+      } catch (e) {
+        ElMessage.error(`${row.NAME}: ${e.response?.data?.detail || e.message}`)
+      }
+    }
+    ElMessage.success('删除完成')
+    await loadUndo()
+  } catch { /* cancel */ }
 }
 
 onMounted(() => {

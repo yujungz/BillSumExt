@@ -81,6 +81,32 @@ async def undo_set_active(req: UndoNameReq):
         raise HTTPException(500, detail=f"激活 undo 失败: {str(e)[:300]}")
 
 
+@router.post("/undo/create")
+async def undo_create(req: UndoNameReq):
+    """新建 undo tablespace(用于满足≥2 active 后才能 inactive 清除)。"""
+    name = req.name.strip()
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise HTTPException(400, detail="无效的 undo tablespace 名(仅字母/数字/下划线)")
+    try:
+        await db.execute(f"CREATE UNDO TABLESPACE `{name}` ADD DATAFILE '{name}.ibu'")
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, detail=f"创建 undo 失败: {str(e)[:300]}")
+
+
+@router.post("/undo/drop")
+async def undo_drop(req: UndoNameReq):
+    """删除 undo tablespace(仅可删 inactive 的、非系统默认的)。"""
+    name = req.name.strip()
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
+        raise HTTPException(400, detail="无效的 undo tablespace 名")
+    try:
+        await db.execute(f"DROP UNDO TABLESPACE `{name}`")
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, detail=f"删除 undo 失败: {str(e)[:300]}")
+
+
 
 
 

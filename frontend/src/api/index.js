@@ -101,6 +101,8 @@ export default {
     undo: () => api.get('/system/undo'),
     undoSetInactive: (data) => api.post('/system/undo/set-inactive', data),
     undoSetActive: (data) => api.post('/system/undo/set-active', data),
+    undoCreate: (data) => api.post('/system/undo/create', data),
+    undoDrop: (data) => api.post('/system/undo/drop', data),
     executeSql: (site, formData) => api.post('/system/execute-sql', formData, { params: { site }, headers: { 'Content-Type': 'multipart/form-data' } }),
     users: () => api.get('/system/users'),
     createUser: (data) => api.post('/system/users', data),
