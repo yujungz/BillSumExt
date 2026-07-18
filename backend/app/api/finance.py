@@ -129,8 +129,20 @@ async def supplier_export(
     rows = await finance_service.supplier_query(site, table, username, date_start, date_end, supplier_name)
     if not rows:
         raise HTTPException(400, detail="无数据可导出")
+    # 构建 spec → 子进程生成 xlsx(不占 uvicorn GIL)
+    from app.services.export_helper import generate_xlsx_subprocess
+    col_keys = list(rows[0].keys())
+    spec = {"sheets": [{"name": "供应商对账", "columns": [{"name": k, "label": k} for k in col_keys], "rows": rows}]}
     loop = asyncio.get_running_loop()
-    content = await loop.run_in_executor(None, _build_supplier_excel, rows)
+    xlsx_path = await generate_xlsx_subprocess(loop, spec)
+    import os as _os
+    ds = date_start.replace("-", "")
+    de = date_end.replace("-", "")
+    who = username or "全部"
+    filename = f"supplier{ds}_{de}_{who}.xlsx"
+    from fastapi.responses import FileResponse as _FR
+    return _FR(path=xlsx_path, filename=filename,
+               media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     ds = date_start.replace("-", "")
     de = date_end.replace("-", "")
     who = username or "全部"

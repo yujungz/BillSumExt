@@ -3,15 +3,17 @@
 import asyncio
 import csv
 import io
+import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
 
 from fastapi import APIRouter, Query, HTTPException, UploadFile, File
-from fastapi.responses import Response, StreamingResponse
+from fastapi.responses import Response, StreamingResponse, FileResponse
 
 from app.config import AppConfig
 from app.services import query_service, parser_service
@@ -144,6 +146,77 @@ def _build_csv_bytes(cols, rows) -> bytes:
     return buf.getvalue().encode('utf-8')
 
 
+def _export_csv_subprocess(mc, db_name, table, tmp_path, where=""):
+    """TSV 导出: mysql 子进程直接写文件(完全绕过 Python GIL)。"""
+    query = f"SELECT * FROM `{table}`{where}"
+    cmd = [
+        "mysql",
+        f"--host={mc.host}", f"--port={mc.port}",
+        f"--user={mc.user}", f"--password={mc.password}",
+        "--skip-ssl", "--batch",
+        "-e", query,
+        db_name,
+    ]
+    with open(tmp_path, "wb") as fout:
+        proc = subprocess.run(cmd, stdout=fout, stderr=subprocess.PIPE, timeout=3600)
+    if proc.returncode != 0:
+        raise RuntimeError(f"mysql export failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
+
+
+def _build_where_sql(filters):
+    """从 filters dict 构建 WHERE 子句(用于 mysql -e 子进程, 参数化转义)。"""
+    if not filters:
+        return ""
+    conditions = []
+    for key, val in filters.items():
+        if not val:
+            continue
+        safe_val = str(val).replace("\\", "\\\\").replace("'", "\\'")
+        if key == 'created_at_start':
+            conditions.append(f"created_at >= UNIX_TIMESTAMP('{safe_val} 00:00:00')-28800")
+        elif key == 'created_at_end':
+            conditions.append(f"created_at <= UNIX_TIMESTAMP('{safe_val} 23:59:59')-28800")
+        elif re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', key):
+            conditions.append(f"`{key}` LIKE '%{safe_val}%'")
+    return (" WHERE " + " AND ".join(conditions)) if conditions else ""
+
+
+# xlsx 转换子进程脚本路径
+XLSX_WORKER = os.path.join(os.path.dirname(os.path.dirname(__file__)), "services", "export_xlsx_worker.py")
+
+
+def _export_sql_subprocess(mc, db_name, table, tmp_path):
+    """SQL 导出: mysqldump 子进程直接写文件。"""
+    cmd = [
+        "mysqldump",
+        f"--host={mc.host}", f"--port={mc.port}",
+        f"--user={mc.user}", f"--password={mc.password}",
+        "--default-character-set=utf8mb4", "--skip-ssl",
+        "--no-tablespaces", "--single-transaction", "--set-gtid-purged=OFF",
+        db_name, table,
+    ]
+    with open(tmp_path, "wb") as fout:
+        proc = subprocess.run(cmd, stdout=fout, stderr=subprocess.PIPE, timeout=3600)
+    if proc.returncode != 0:
+        raise RuntimeError(f"mysqldump failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
+
+
+def _export_xlsx_file(cols, rows, tmp_path):
+    """xlsx 导出: openpyxl write_only 写文件(同步函数, 供 run_in_executor)。"""
+    content = _build_xlsx(cols, rows)
+    with open(tmp_path, "wb") as f:
+        f.write(content)
+
+
+def _run_xlsx_worker(tsv_path, xlsx_path, cols_json):
+    """启动 xlsx 转换子进程(TSV → xlsx, 独立 Python 进程不占 uvicorn GIL)。"""
+    proc = subprocess.run(
+        [sys.executable, XLSX_WORKER, tsv_path, xlsx_path, cols_json],
+        capture_output=True, timeout=3600,
+    )
+    return proc
+
+
 @router.post("/export-async")
 async def export_table_async(
     site: str = Query(...),
@@ -160,33 +233,66 @@ async def export_table_async(
 
     task_id = uuid.uuid4().hex[:8]
     _EXPORT_TASKS[task_id] = {
-        "status": "running", "file": None, "error": None, "media": "", "fn": fn,
-        "format": format, "start": time.time(), "end": None,
+        "status": "running", "file_path": None, "error": None,
+        "media": "", "fn": fn, "format": format,
+        "start": time.time(), "end": None,
     }
 
     async def _run():
         t = _EXPORT_TASKS[task_id]
+        tmp_path = None
         try:
-            columns, rows = await query_service.export_all_data(site, table, f)
-            cols = _apply_fields(columns, fields)
+            config = AppConfig.load()
+            db_name = config.db_name(site)
+            mc = config.mysql
             loop = asyncio.get_running_loop()
+
             if format == "sql":
-                content = await loop.run_in_executor(None, query_service.export_table_sql, site, table)
+                # mysqldump 子进程 → 文件(完全不经过 Python)
+                tmp_path = tempfile.NamedTemporaryFile(suffix=".sql", delete=False).name
+                await loop.run_in_executor(None, _export_sql_subprocess, mc, db_name, table, tmp_path)
                 t["media"] = "text/plain; charset=utf-8"
                 t["fn"] = f"{fn}.sql"
             elif format == "csv":
-                content = await loop.run_in_executor(None, _build_csv_bytes, cols, rows)
+                # mysql 子进程 → TSV 文件(完全不经过 Python)
+                where = _build_where_sql(f)
+                tmp_path = tempfile.NamedTemporaryFile(suffix=".tsv", delete=False).name
+                await loop.run_in_executor(None, _export_csv_subprocess, mc, db_name, table, tmp_path, where)
                 t["media"] = "text/csv; charset=utf-8"
                 t["fn"] = f"{fn}.csv"
             else:
-                content = await loop.run_in_executor(None, _build_xlsx, cols, rows)
+                # xlsx: TSV 子进程 dump → 独立 Python 子进程转换(两步都不占 uvicorn GIL)
+                where = _build_where_sql(f)
+                tsv_path = tempfile.NamedTemporaryFile(suffix=".tsv", delete=False).name
+                await loop.run_in_executor(None, _export_csv_subprocess, mc, db_name, table, tsv_path, where)
+
+                # 获取列映射(轻量 information_schema 查询)
+                columns = await query_service.get_table_columns(site, table)
+                cols = _apply_fields(columns, fields)
+                cols_json = json.dumps([{"name": c["name"], "label": c["label"]} for c in cols])
+
+                # 独立子进程 TSV → xlsx
+                tmp_path = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False).name
+                proc = await loop.run_in_executor(None, _run_xlsx_worker, tsv_path, tmp_path, cols_json)
+                try:
+                    os.unlink(tsv_path)
+                except OSError:
+                    pass
+                if proc.returncode != 0:
+                    raise RuntimeError(f"xlsx worker failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
                 t["media"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 t["fn"] = f"{fn}.xlsx"
-            t["file"] = content
+
+            t["file_path"] = tmp_path
             t["status"] = "done"
         except Exception as e:
             t["status"] = "failed"
             t["error"] = f"导出失败: {str(e)[:300]}"
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
         finally:
             t["end"] = time.time()
 
@@ -210,14 +316,17 @@ async def export_table_download(task_id: str = Query(...)):
         raise HTTPException(404, detail="任务不存在或已过期")
     if t["status"] != "done":
         raise HTTPException(400, detail="文件尚未生成完毕")
-    content = t["file"]
+    file_path = t.get("file_path")
     filename = t["fn"]
     media = t["media"]
     _EXPORT_TASKS.pop(task_id, None)
-    return Response(
-        content=content,
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(500, detail="导出文件不存在")
+    # FileResponse 流式发送文件, 不加载到内存
+    return FileResponse(
+        path=file_path,
         media_type=media,
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        filename=filename,
     )
 
 

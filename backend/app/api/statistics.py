@@ -11,6 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import Response, FileResponse
+from app.services.export_helper import generate_xlsx_subprocess
 from pydantic import BaseModel
 import openpyxl
 from openpyxl.styles import Font
@@ -567,14 +568,49 @@ async def export_stats_async(req: StatsRequest):
                 show_channel_name=req.show_channel_name,
             )
             if not result:
-                t["file"] = b""
                 t["status"] = "done"
                 return
+            # 构建 spec (主进程, 轻量)
+            col_def = [
+                ("period_month", "月份"), ("period_day", "日期"), ("user_id", "用户ID"),
+                ("username", "用户名"), ("channel_id", "渠道ID"), ("channel_name", "渠道"),
+                ("model_name", "模型"), ("group_name", "分组"), ("token_name", "Token名称"),
+                ("cn_buyer1", "采购员"), ("cn_supplier1", "供应商"), ("us_salesperson", "销售员"),
+                ("call_count", "调用次数"), ("input_tokens", "输入token"), ("input_unit_price", "输入单价"),
+                ("input_cost", "输入费用"), ("output_tokens", "输出token"), ("output_unit_price", "输出单价"),
+                ("output_cost", "输出费用"), ("cache_read_tokens", "读取缓存token"),
+                ("cache_read_unit_price", "读取缓存单价"), ("cache_read_cost", "读取缓存费用"),
+                ("cache_create_5m_tokens", "创建缓存5M-token"), ("cache_create_5m_unit_price", "创建缓存5M单价"),
+                ("cache_create_5m_cost", "创建缓存5M费用"), ("cache_create_1h_tokens", "创建缓存1H-token"),
+                ("cache_create_1h_unit_price", "创建缓存1H单价"), ("cache_create_1h_cost", "创建缓存1H费用"),
+                ("cache_create_tokens", "创建缓存token"), ("cache_create_cost", "创建缓存费用"),
+                ("cache_total_tokens", "缓存总token"), ("cache_total_cost", "缓存总费用"),
+                ("total_tokens", "总消耗token"), ("total_cost", "消费额度"), ("platform_quota", "平台额度"),
+            ]
+            visible = [(k, l) for k, l in col_def if any(r.get(k) is not None for r in result)]
+            if req.fields:
+                try:
+                    flds = {x["name"] for x in json.loads(req.fields)}
+                    data_keys = set(k for k, _ in col_def if k not in FIELD_SQL)
+                    visible = [(k, l) for k, l in visible if k in data_keys or k in flds]
+                except Exception:
+                    pass
+            if req.group_by:
+                dc = "period_day" if "day" in req.group_by else "period_month"
+                result.sort(key=lambda r: (r.get(dc) or ""), reverse=True)
+            no_sum = {"period_month", "period_day", "user_id", "username", "channel_id",
+                      "channel_name", "model_name", "group_name", "token_name",
+                      "cn_buyer1", "cn_supplier1", "us_salesperson"}
+            spec = {"sheets": [{
+                "name": "Stats",
+                "columns": [{"name": k, "label": l} for k, l in visible],
+                "rows": result,
+                "total_fields": [k for k, _ in visible if k not in no_sum],
+            }]}
+            # 子进程生成 xlsx (不占 uvicorn GIL)
             loop = asyncio.get_running_loop()
-            content = await loop.run_in_executor(
-                None, _build_stats_bytes, result, req.group_by, req.fields,
-            )
-            t["file"] = content
+            xlsx_path = await generate_xlsx_subprocess(loop, spec)
+            t["file_path"] = xlsx_path
             t["status"] = "done"
         except Exception as e:
             t["status"] = "failed"
@@ -602,13 +638,12 @@ async def export_stats_download(task_id: str = Query(...)):
         raise HTTPException(404, detail="任务不存在或已过期")
     if t["status"] != "done":
         raise HTTPException(400, detail="文件尚未生成完毕")
-    content = t["file"]
+    file_path = t.get("file_path")
     _STATS_EXPORT_TASKS.pop(task_id, None)
-    return Response(
-        content=content,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=stats_export.xlsx"},
-    )
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(500, detail="导出文件不存在")
+    return FileResponse(path=file_path, filename="stats_export.xlsx",
+                        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
 @router.post("/export-detail")
