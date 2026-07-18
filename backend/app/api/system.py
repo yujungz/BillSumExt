@@ -1,6 +1,7 @@
 """System API - binlog management, user management, system logs, and SQL execution."""
 
 import os
+import re
 import subprocess
 import tempfile
 import logging
@@ -31,6 +32,43 @@ async def purge_binlog(req: PurgeRequest):
         await db.execute(f"PURGE BINARY LOGS TO '{req.before}'")
     else:
         await db.execute("PURGE BINARY LOGS BEFORE NOW()")
+    return {"success": True}
+
+
+# ── undo tablespace 管理 ──
+
+_UNDO_NAME_RE = re.compile(r'^innodb_undo_\d+$')
+
+
+def _validate_undo_name(name: str):
+    if not _UNDO_NAME_RE.match(name):
+        raise HTTPException(400, detail=f"无效的 undo tablespace 名: {name}")
+
+
+@router.get("/undo")
+async def list_undo():
+    rows = await db.fetch_all(
+        "SELECT NAME, STATE, ROUND(FILE_SIZE / 1024 / 1024, 2) AS size_mb "
+        "FROM information_schema.INNODB_TABLESPACES WHERE NAME LIKE '%undo%'"
+    )
+    return {"undo": rows}
+
+
+class UndoNameReq(BaseModel):
+    name: str
+
+
+@router.post("/undo/set-inactive")
+async def undo_set_inactive(req: UndoNameReq):
+    _validate_undo_name(req.name)
+    await db.execute(f"ALTER UNDO TABLESPACE `{req.name}` SET INACTIVE")
+    return {"success": True}
+
+
+@router.post("/undo/set-active")
+async def undo_set_active(req: UndoNameReq):
+    _validate_undo_name(req.name)
+    await db.execute(f"ALTER UNDO TABLESPACE `{req.name}` SET ACTIVE")
     return {"success": True}
 
 

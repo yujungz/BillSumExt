@@ -2,7 +2,10 @@
   <div class="system-view">
     <el-tabs v-model="activeTab" type="border-card" class="system-tabs">
       <!-- ════════════ Tab 1: Binlog Management ════════════ -->
-      <el-tab-pane label="Binlog 管理" name="binlog">
+      <el-tab-pane label="数据库管理" name="binlog">
+        <el-tabs v-model="dbSubTab" type="card" style="margin-bottom: 10px">
+
+        <el-tab-pane label="Binlog管理" name="binlog">
         <el-card shadow="never" :body-style="{ padding: '20px' }">
           <el-space>
             <el-button type="primary" :loading="loading" @click="loadBinlog">刷新</el-button>
@@ -28,6 +31,33 @@
             <el-descriptions-item label="总大小">{{ formatSize(null, null, totalSize) }}</el-descriptions-item>
           </el-descriptions>
         </el-card>
+        </el-tab-pane>
+
+        <el-tab-pane label="undo管理" name="undo">
+        <el-card shadow="never" :body-style="{ padding: '20px' }">
+          <el-space>
+            <el-button type="primary" :loading="undoLoading" @click="loadUndo">刷新</el-button>
+            <el-button type="warning" :loading="undoPurging" @click="purgeUndoConfirm">清除选中</el-button>
+            <span v-if="undoStatusText" class="export-timer">{{ undoStatusText }}</span>
+          </el-space>
+
+          <el-table :data="undoList" border stripe style="margin-top: 16px; width: 100%">
+            <el-table-column width="50" align="center">
+              <template #header>
+                <el-checkbox :model-value="allUndoSelected" @change="(v) => toggleAllUndo(v)" />
+              </template>
+              <template #default="{ row }">
+                <el-checkbox :model-value="selectedUndo.has(row.NAME)" @change="(v) => toggleUndoRow(row, v)" />
+              </template>
+            </el-table-column>
+            <el-table-column prop="NAME" label="文件名" />
+            <el-table-column prop="STATE" label="状态" width="140" />
+            <el-table-column prop="size_mb" label="大小(MB)" width="120" />
+          </el-table>
+        </el-card>
+        </el-tab-pane>
+
+        </el-tabs>
       </el-tab-pane>
 
       <!-- ════════════ Tab 2: Admin Management ════════════ -->
@@ -193,6 +223,7 @@ function isProtected(name) { return PROTECTED.includes(name) }
 
 // ── Tab ──
 const activeTab = ref('binlog')
+const dbSubTab = ref('binlog')
 
 // ── Binlog ──
 const binlogs = ref([])
@@ -486,11 +517,90 @@ async function clearLogsBefore() {
   loadLogs(1)
 }
 
+// ── undo 管理 ──
+const undoList = ref([])
+const undoLoading = ref(false)
+const undoPurging = ref(false)
+const undoStatusText = ref('')
+const selectedUndo = ref(new Set())
+const allUndoSelected = computed(() => undoList.value.length > 0 && selectedUndo.value.size === undoList.value.length)
+
+async function loadUndo() {
+  undoLoading.value = true
+  try {
+    const { data } = await api.system.undo()
+    undoList.value = data.undo || []
+    selectedUndo.value = new Set(undoList.value.map(r => r.NAME))
+  } finally {
+    undoLoading.value = false
+  }
+}
+
+function toggleAllUndo(checked) {
+  selectedUndo.value = checked ? new Set(undoList.value.map(r => r.NAME)) : new Set()
+}
+
+function toggleUndoRow(row, checked) {
+  const s = new Set(selectedUndo.value)
+  if (checked) s.add(row.NAME); else s.delete(row.NAME)
+  selectedUndo.value = s
+}
+
+async function purgeUndoConfirm() {
+  const targets = undoList.value.filter(r => selectedUndo.value.has(r.NAME))
+  if (!targets.length) { ElMessage.warning('请选择 undo 文件'); return }
+  await ElMessageBox.confirm(
+    `确认清除选中的 ${targets.length} 个 undo 文件？将依次关闭、等待收缩到 ~16MB、重新激活。`, '确认',
+    { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' })
+  undoPurging.value = true
+  try {
+    for (const row of targets) {
+      await _purgeOneUndo(row)
+    }
+    ElMessage.success('undo 清除完成')
+    await loadUndo()
+  } catch (e) {
+    ElMessage.error('undo 清除失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    undoPurging.value = false
+    undoStatusText.value = ''
+  }
+}
+
+async function _purgeOneUndo(row) {
+  // 1. 关闭(INACTIVE 触发 truncate)
+  undoStatusText.value = `${row.NAME}: 关闭中...`
+  await api.system.undoSetInactive({ name: row.NAME })
+  row.STATE = 'inactive'
+  // 2. 轮询 size，等待收缩到 <=18MB(~16M)
+  undoStatusText.value = `${row.NAME}: 等待收缩...`
+  let shrunk = false
+  for (let i = 0; i < 12; i++) {  // 最多 12 次 × 5 秒 = 60 秒
+    await new Promise(r => setTimeout(r, 5000))
+    const { data } = await api.system.undo()
+    const updated = (data.undo || []).find(r => r.NAME === row.NAME)
+    if (updated) {
+      row.size_mb = updated.size_mb
+      row.STATE = updated.STATE
+      undoStatusText.value = `${row.NAME}: 收缩中 ${row.size_mb}MB（第 ${i + 1}/12 次）`
+    }
+    if (updated && Number(updated.size_mb) <= 18) { shrunk = true; break }
+  }
+  // 3. 激活
+  undoStatusText.value = `${row.NAME}: 激活中...`
+  await api.system.undoSetActive({ name: row.NAME })
+  row.STATE = 'active'
+  if (!shrunk) {
+    ElMessage.warning(`${row.NAME} 收缩可能未完成（仍 ${row.size_mb}MB），已重新激活`)
+  }
+}
+
 onMounted(() => {
   loadBinlog()
   loadUsers()
   logSearch.dateRange = getDefaultDateRange()
   loadLogs()
+  loadUndo()
 })
 </script>
 

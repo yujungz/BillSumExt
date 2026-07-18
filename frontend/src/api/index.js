@@ -98,6 +98,9 @@ export default {
   system: {
     binlog: () => api.get('/system/binlog'),
     purge: (data) => api.post('/system/binlog/purge', data),
+    undo: () => api.get('/system/undo'),
+    undoSetInactive: (data) => api.post('/system/undo/set-inactive', data),
+    undoSetActive: (data) => api.post('/system/undo/set-active', data),
     executeSql: (site, formData) => api.post('/system/execute-sql', formData, { params: { site }, headers: { 'Content-Type': 'multipart/form-data' } }),
     users: () => api.get('/system/users'),
     createUser: (data) => api.post('/system/users', data),
