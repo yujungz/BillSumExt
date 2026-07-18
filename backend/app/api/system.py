@@ -1,5 +1,6 @@
 """System API - binlog management, user management, system logs, and SQL execution."""
 
+import asyncio
 import os
 import re
 import subprocess
@@ -96,12 +97,30 @@ async def undo_create(req: UndoNameReq):
 
 @router.post("/undo/drop")
 async def undo_drop(req: UndoNameReq):
-    """删除 undo tablespace(仅可删 inactive 的、非系统默认的)。"""
+    """删除 undo tablespace: 先 SET INACTIVE → 等 STATE 非 active → DROP。"""
     name = req.name.strip()
     if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', name):
         raise HTTPException(400, detail="无效的 undo tablespace 名")
     try:
+        # 1. 先设 INACTIVE
+        try:
+            await db.execute(f"ALTER UNDO TABLESPACE `{name}` SET INACTIVE")
+        except Exception:
+            pass  # 可能已经 inactive
+        # 2. 轮询等待 STATE 变为非 active(最多 30 秒)
+        ready = False
+        for _ in range(15):
+            await asyncio.sleep(2)
+            row = await db.fetch_one(
+                "SELECT STATE FROM information_schema.INNODB_TABLESPACES WHERE NAME=%s", (name,)
+            )
+            if row and "active" not in (row.get("STATE") or "").lower():
+                ready = True
+                break
+        # 3. DROP
         await db.execute(f"DROP UNDO TABLESPACE `{name}`")
+        if not ready:
+            return {"success": True, "warning": f"{name} 未完全释放就尝试删除，可能需重试"}
         return {"success": True}
     except Exception as e:
         raise HTTPException(500, detail=f"删除 undo 失败: {str(e)[:300]}")
