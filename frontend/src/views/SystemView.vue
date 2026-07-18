@@ -532,7 +532,7 @@ async function loadUndo() {
   try {
     const { data } = await api.system.undo()
     undoList.value = data.undo || []
-    selectedUndo.value = new Set(undoList.value.map(r => r.NAME))
+    selectedUndo.value = new Set()
   } finally {
     undoLoading.value = false
   }
