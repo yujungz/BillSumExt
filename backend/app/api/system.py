@@ -47,11 +47,14 @@ def _validate_undo_name(name: str):
 
 @router.get("/undo")
 async def list_undo():
-    rows = await db.fetch_all(
-        "SELECT NAME, STATE, ROUND(FILE_SIZE / 1024 / 1024, 2) AS size_mb "
-        "FROM information_schema.INNODB_TABLESPACES WHERE NAME LIKE '%undo%'"
-    )
-    return {"undo": rows}
+    try:
+        rows = await db.fetch_all(
+            "SELECT NAME, STATE, ROUND(FILE_SIZE / 1024 / 1024, 2) AS size_mb "
+            "FROM information_schema.INNODB_TABLESPACES WHERE NAME LIKE '%undo%'"
+        )
+        return {"undo": rows}
+    except Exception as e:
+        raise HTTPException(500, detail=f"查询 undo 失败: {str(e)[:300]}")
 
 
 class UndoNameReq(BaseModel):
@@ -61,15 +64,24 @@ class UndoNameReq(BaseModel):
 @router.post("/undo/set-inactive")
 async def undo_set_inactive(req: UndoNameReq):
     _validate_undo_name(req.name)
-    await db.execute(f"ALTER UNDO TABLESPACE `{req.name}` SET INACTIVE")
-    return {"success": True}
+    try:
+        await db.execute(f"ALTER UNDO TABLESPACE `{req.name}` SET INACTIVE")
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, detail=f"关闭 undo 失败: {str(e)[:300]}")
 
 
 @router.post("/undo/set-active")
 async def undo_set_active(req: UndoNameReq):
     _validate_undo_name(req.name)
-    await db.execute(f"ALTER UNDO TABLESPACE `{req.name}` SET ACTIVE")
-    return {"success": True}
+    try:
+        await db.execute(f"ALTER UNDO TABLESPACE `{req.name}` SET ACTIVE")
+        return {"success": True}
+    except Exception as e:
+        raise HTTPException(500, detail=f"激活 undo 失败: {str(e)[:300]}")
+
+
+
 
 
 @router.post("/execute-sql")
