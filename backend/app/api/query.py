@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 
 from fastapi import APIRouter, Query, HTTPException, UploadFile, File
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 
 from app.config import AppConfig
 from app.services import query_service, parser_service
@@ -89,21 +89,26 @@ async def export_table(
     cols = _apply_fields(columns, fields)
 
     if format == "csv":
-        output = io.StringIO()
-        output.write('﻿')
-        writer = csv.writer(output)
-        writer.writerow([c['label'] for c in cols])
-        for row in rows:
-            writer.writerow([str(row.get(c['name'], '')) for c in cols])
-        return Response(
-            content=output.getvalue(),
+        def _csv_stream():
+            buf = io.StringIO()
+            buf.write('﻿')
+            writer = csv.writer(buf)
+            writer.writerow([c['label'] for c in cols])
+            for i, row in enumerate(rows):
+                writer.writerow([str(row.get(c['name'], '')) for c in cols])
+                if i % 10000 == 9999:  # 每 1 万行 flush 一次
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate(0)
+            yield buf.getvalue()
+
+        return StreamingResponse(
+            _csv_stream(),
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f"attachment; filename={fn}.csv"},
         )
 
-    # xlsx - openpyxl write_only(限制 20 万行, 超过请用 CSV)
-    if len(rows) > 200000:
-        raise HTTPException(400, detail=f"数据量过大（{len(rows)} 行），xlsx 最多导出 20 万行。请用 CSV 格式或缩小筛选范围。")
+    # xlsx - openpyxl write_only + 分sheet(每100万行一个sheet)
     content = _build_xlsx(cols, rows)
     return Response(
         content=content,
@@ -141,18 +146,30 @@ def _build_xlsx(columns, rows):
     from app.services.excel_util import cell_value
 
     wb = openpyxl.Workbook(write_only=True)
-    ws = wb.create_sheet("Data")
     bold = Font(bold=True)
-    # 表头(WriteOnlyCell 支持字体)
-    header = []
-    for c in columns:
-        cell = WriteOnlyCell(ws, value=c['label'])
-        cell.font = bold
-        header.append(cell)
-    ws.append(header)
-    # 数据行(流式 append, 省内存)
+    MAX_PER_SHEET = 1000000
+
+    def _new_sheet(idx):
+        ws = wb.create_sheet("Data" if idx == 1 else f"Data_{idx}")
+        header = []
+        for c in columns:
+            cell = WriteOnlyCell(ws, value=c['label'])
+            cell.font = bold
+            header.append(cell)
+        ws.append(header)
+        return ws
+
+    ws = _new_sheet(1)
+    sheet_idx = 1
+    row_in_sheet = 0
     for row in rows:
+        if row_in_sheet >= MAX_PER_SHEET:
+            sheet_idx += 1
+            ws = _new_sheet(sheet_idx)
+            row_in_sheet = 0
         ws.append([cell_value(row.get(c['name'], '')) for c in columns])
+        row_in_sheet += 1
+
     buf = io.BytesIO()
     wb.save(buf)
     return buf.getvalue()
