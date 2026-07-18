@@ -1,11 +1,14 @@
 """Query API - list, query, delete and export tables."""
 
+import asyncio
 import csv
 import io
 import os
 import re
 import subprocess
 import tempfile
+import time
+import uuid
 
 from fastapi import APIRouter, Query, HTTPException, UploadFile, File
 from fastapi.responses import Response, StreamingResponse
@@ -114,6 +117,107 @@ async def export_table(
         content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={fn}.xlsx"},
+    )
+
+
+# ── 异步导出(大数据量, 避免 uvicorn 同步 CPU 阻塞) ──
+
+_EXPORT_TASKS: dict[str, dict] = {}
+_EXPORT_TTL = 3600
+
+
+def _gc_export_tasks():
+    now = time.time()
+    expired = [k for k, v in _EXPORT_TASKS.items() if v["end"] and now - v["end"] > _EXPORT_TTL]
+    for k in expired:
+        _EXPORT_TASKS.pop(k, None)
+
+
+def _build_csv_bytes(cols, rows) -> bytes:
+    """生成 CSV bytes(用于异步导出, 非流式)。"""
+    buf = io.StringIO()
+    buf.write('﻿')
+    writer = csv.writer(buf)
+    writer.writerow([c['label'] for c in cols])
+    for row in rows:
+        writer.writerow([str(row.get(c['name'], '')) for c in cols])
+    return buf.getvalue().encode('utf-8')
+
+
+@router.post("/export-async")
+async def export_table_async(
+    site: str = Query(...),
+    table: str = Query(...),
+    format: str = Query("xlsx"),
+    filters: str = Query(None),
+    fields: str = Query(None),
+):
+    _validate_table(table)
+    _gc_export_tasks()
+    import json
+    f = json.loads(filters) if filters else None
+    fn = f"{site}_{table}"
+
+    task_id = uuid.uuid4().hex[:8]
+    _EXPORT_TASKS[task_id] = {
+        "status": "running", "file": None, "error": None, "media": "", "fn": fn,
+        "format": format, "start": time.time(), "end": None,
+    }
+
+    async def _run():
+        t = _EXPORT_TASKS[task_id]
+        try:
+            columns, rows = await query_service.export_all_data(site, table, f)
+            cols = _apply_fields(columns, fields)
+            loop = asyncio.get_running_loop()
+            if format == "sql":
+                content = await loop.run_in_executor(None, query_service.export_table_sql, site, table)
+                t["media"] = "text/plain; charset=utf-8"
+                t["fn"] = f"{fn}.sql"
+            elif format == "csv":
+                content = await loop.run_in_executor(None, _build_csv_bytes, cols, rows)
+                t["media"] = "text/csv; charset=utf-8"
+                t["fn"] = f"{fn}.csv"
+            else:
+                content = await loop.run_in_executor(None, _build_xlsx, cols, rows)
+                t["media"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                t["fn"] = f"{fn}.xlsx"
+            t["file"] = content
+            t["status"] = "done"
+        except Exception as e:
+            t["status"] = "failed"
+            t["error"] = f"导出失败: {str(e)[:300]}"
+        finally:
+            t["end"] = time.time()
+
+    asyncio.create_task(_run())
+    return {"task_id": task_id}
+
+
+@router.get("/export-status")
+async def export_table_status(task_id: str = Query(...)):
+    t = _EXPORT_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    elapsed = (t["end"] or time.time()) - t["start"]
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+
+
+@router.get("/export-download")
+async def export_table_download(task_id: str = Query(...)):
+    t = _EXPORT_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    if t["status"] != "done":
+        raise HTTPException(400, detail="文件尚未生成完毕")
+    content = t["file"]
+    filename = t["fn"]
+    media = t["media"]
+    _EXPORT_TASKS.pop(task_id, None)
+    return Response(
+        content=content,
+        media_type=media,
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
     )
 
 

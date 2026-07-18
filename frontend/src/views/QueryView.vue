@@ -30,7 +30,7 @@
                 <el-dropdown-menu>
                   <el-dropdown-item command="xlsx">Excel (.xlsx)</el-dropdown-item>
                   <el-dropdown-item command="csv">CSV (.csv)</el-dropdown-item>
-                  <el-dropdown-item command="sql">SQL (.sql)</el-dropdown-item>
+                  <el-dropdown-item command="sql">SQL (.sql) — 大数据量推荐</el-dropdown-item>
                 </el-dropdown-menu>
               </template>
             </el-dropdown>
@@ -139,6 +139,7 @@ const importLoading = ref(false)
 const overwrite = ref(false)
 const parseLoading = ref(false)
 const exportTimerText = ref('')
+let _queryExportGen = 0
 
 const canImport = computed(() => ['ex_channels', 'ex_tokens', 'ex_users'].includes(selectedTable.value))
 const canParse = computed(() => ['channels', 'tokens', 'users'].includes(selectedTable.value))
@@ -434,18 +435,17 @@ async function exportConfirm(format) {
     ElMessage.warning('请先选择表')
     return
   }
+  const gen = ++_queryExportGen
 
   const fileName = `${site.value}_${selectedTable.value}.${format === 'xlsx' ? 'xlsx' : format === 'csv' ? 'csv' : 'sql'}`
   const filters = buildFilters()
-  const filterStr = filters ? JSON.stringify(filters) : ''
   const fieldsArr = displayColumns.value.map(c => ({ name: c.name, label: c.label }))
-  const fieldsStr = fieldsArr.length ? `&fields=${encodeURIComponent(JSON.stringify(fieldsArr))}` : ''
-  const url = `/api/query/export?site=${site.value}&table=${selectedTable.value}&format=${format}${filterStr ? `&filters=${encodeURIComponent(filterStr)}` : ''}${fieldsStr}`
 
-  const { t0, timer } = startTimer()
-  try {
-    if (window.showSaveFilePicker) {
-      const handle = await window.showSaveFilePicker({
+  // 先弹文件选择器(需用户激活), 后续异步操作不再有 user activation
+  let saveHandle = null
+  if (window.showSaveFilePicker) {
+    try {
+      saveHandle = await window.showSaveFilePicker({
         suggestedName: fileName,
         types: format === 'xlsx'
           ? [{ description: 'Excel文件', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }]
@@ -453,25 +453,56 @@ async function exportConfirm(format) {
             ? [{ description: 'CSV文件', accept: { 'text/csv': ['.csv'] } }]
             : [{ description: 'SQL文件', accept: { 'text/plain': ['.sql'] } }],
       })
-      const resp = await fetch(url)
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-        throw new Error(err.detail || '导出失败')
-      }
-      const blob = await resp.blob()
-      const writable = await handle.createWritable()
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return
+    }
+  }
+
+  const { t0, timer } = startTimer()
+  try {
+    // 启动异步导出(后台 run_in_executor, 不阻塞 uvicorn)
+    const params = {
+      site: site.value,
+      table: selectedTable.value,
+      format,
+      filters: filters ? JSON.stringify(filters) : '',
+      fields: fieldsArr.length ? JSON.stringify(fieldsArr) : '',
+    }
+    const { data: td } = await api.query.exportAsync(params)
+
+    // 轮询状态
+    while (gen === _queryExportGen) {
+      await new Promise(r => setTimeout(r, 1500))
+      if (gen !== _queryExportGen) return
+      const { data: st } = await api.query.exportStatus(td.task_id)
+      if (st.status === 'done') break
+      if (st.status === 'failed') throw new Error(st.error || '导出失败')
+    }
+    if (gen !== _queryExportGen) return
+
+    // 下载文件
+    const { data: blob } = await api.query.exportDownload(td.task_id)
+    if (saveHandle) {
+      try { await saveHandle.requestPermission({ mode: 'readwrite' }) } catch {}
+      const writable = await saveHandle.createWritable()
       await writable.write(blob)
       await writable.close()
-      ElMessage.success(`已保存到 ${handle.name}`)
+      ElMessage.success(`已保存到 ${saveHandle.name}`)
     } else {
-      window.open(url)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fileName
+      a.click()
+      URL.revokeObjectURL(url)
+      ElMessage.success('导出完成')
     }
     stopTimer(t0, timer)
     _logExport(`站点=${site.value} 表=${selectedTable.value} 格式=${format} 筛选: ${JSON.stringify(buildFilters()) || '无'}`)
   } catch (e) {
     stopTimer(t0, timer)
     if (e instanceof DOMException && e.name === 'AbortError') return
-    ElMessage.error('导出失败: ' + e.message)
+    ElMessage.error('导出失败: ' + (e.response?.data?.detail || e.message))
   }
 }
 

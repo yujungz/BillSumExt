@@ -72,6 +72,9 @@ export default {
     },
     deleteTable: (site, table) => api.delete('/query/table', { params: { site, table } }),
     importTable: (site, table, formData, overwrite = false) => api.post('/query/import', formData, { params: { site, table, overwrite }, headers: { 'Content-Type': 'multipart/form-data' } }),
+    exportAsync: (params) => api.post('/query/export-async', null, { params }),
+    exportStatus: (taskId) => api.get('/query/export-status', { params: { task_id: taskId } }),
+    exportDownload: (taskId) => api.get('/query/export-download', { params: { task_id: taskId }, responseType: 'blob' }),
   },
   // Stats
   stats: {
@@ -84,6 +87,9 @@ export default {
     exportDetailAsync: (data) => api.post('/stats/export-detail-async', data),
     exportDetailStatus: (taskId) => api.get('/stats/export-detail-status', { params: { task_id: taskId } }),
     exportDetailDownload: (taskId) => api.get('/stats/export-detail-download', { params: { task_id: taskId }, responseType: 'blob' }),
+    exportAsync: (data) => api.post('/stats/export-async', data),
+    exportStatus: (taskId) => api.get('/stats/export-status', { params: { task_id: taskId } }),
+    exportDownload: (taskId) => api.get('/stats/export-download', { params: { task_id: taskId }, responseType: 'blob' }),
   },
   // Settings
   settings: {

@@ -129,7 +129,8 @@ async def supplier_export(
     rows = await finance_service.supplier_query(site, table, username, date_start, date_end, supplier_name)
     if not rows:
         raise HTTPException(400, detail="无数据可导出")
-    content = _build_supplier_excel(rows)
+    loop = asyncio.get_running_loop()
+    content = await loop.run_in_executor(None, _build_supplier_excel, rows)
     ds = date_start.replace("-", "")
     de = date_end.replace("-", "")
     who = username or "全部"

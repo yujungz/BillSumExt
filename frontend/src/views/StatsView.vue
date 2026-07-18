@@ -528,30 +528,28 @@ async function doExport(format = 'xlsx') {
       exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
     }, 100)
     try {
+      // 异步导出(后台 run_in_executor, 不阻塞 uvicorn)
+      exportTimerText.value = `正在导出 ${fnSum} ...`
+      const { data: td } = await api.stats.exportAsync(body)
+      while (true) {
+        await new Promise(r => setTimeout(r, 1500))
+        const { data: st } = await api.stats.exportStatus(td.task_id)
+        if (st.status === 'done') break
+        if (st.status === 'failed') throw new Error(st.error || '导出失败')
+      }
+      const { data: sumBlob } = await api.stats.exportDownload(td.task_id)
+
       if (dirHandle) {
-        // 已选文件夹 → 保存到文件
-        exportTimerText.value = `正在导出 ${fnSum} ...`
-        const r1 = await fetch('/api/stats/export', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        })
-        if (!r1.ok) throw new Error((await r1.json().catch(() => ({}))).detail || '导出失败')
-        // fetch 耗时后用户激活可能已过期，刷新目录写权限
         try { await dirHandle.requestPermission({ mode: 'readwrite' }) } catch {}
         const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
         const w1 = await fh1.createWritable()
-        await w1.write(await r1.blob())
+        await w1.write(sumBlob)
         await w1.close()
-
         if (showLogDetail.value) {
           await _exportDetail(dirHandle, fnDetail, body)
         }
       } else {
-        // 不支持文件夹选择器 → 直接下载
-        const resp = await fetch('/api/stats/export', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-        })
-        if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || '导出失败')
-        downloadBlob(await resp.blob(), fnSum)
+        downloadBlob(sumBlob, fnSum)
         if (showLogDetail.value) {
           await _exportDetail(null, fnDetail, body)
         }

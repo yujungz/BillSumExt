@@ -468,38 +468,146 @@ async def export_stats(req: StatsRequest):
               "token_name", "cn_buyer1", "cn_supplier1", "us_salesperson"}
     sum_cols = [(ik, k) for ik, (k, l) in enumerate(visible) if k not in no_sum]
 
-    wb = openpyxl.Workbook()
-    ws = wb.active
-    ws.title = "Stats"
-    bold = Font(bold=True)
-    for ci, (_, label) in enumerate(visible, 1):
-        ws.cell(row=1, column=ci, value=label).font = bold
-        ws.column_dimensions[openpyxl.utils.get_column_letter(ci)].width = _col_width(label)
-    for ri, row in enumerate(result, 2):
-        for ci, (key, _) in enumerate(visible, 1):
-            v = row.get(key)
-            ws.cell(row=ri, column=ci, value=cell_value(float(v) if v is not None and hasattr(v, "__float__") else v))
+    loop = asyncio.get_running_loop()
+    content = await loop.run_in_executor(None, _build_stats_bytes, result, req.group_by, req.fields)
+    filename = f"{req.site}_{req.table_name}_sum.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
 
-    last_data_row = len(result) + 1
+
+# ── 异步导出(大数据量, run_in_executor 不阻塞事件循环) ──
+_STATS_EXPORT_TASKS: dict[str, dict] = {}
+_STATS_EXPORT_TTL = 3600
+
+
+def _gc_stats_export_tasks():
+    now = time.time()
+    expired = [k for k, v in _STATS_EXPORT_TASKS.items() if v["end"] and now - v["end"] > _STATS_EXPORT_TTL]
+    for k in expired:
+        _STATS_EXPORT_TASKS.pop(k, None)
+
+
+def _build_stats_bytes(result, group_by, fields):
+    """同步生成 stats xlsx bytes(write_only), 供 run_in_executor 调用。"""
+    from openpyxl.cell import WriteOnlyCell
+    col_def = [
+        ("period_month", "月份"), ("period_day", "日期"), ("user_id", "用户ID"),
+        ("username", "用户名"), ("channel_id", "渠道ID"), ("channel_name", "渠道"),
+        ("model_name", "模型"), ("group_name", "分组"), ("token_name", "Token名称"),
+        ("cn_buyer1", "采购员"), ("cn_supplier1", "供应商"), ("us_salesperson", "销售员"),
+        ("call_count", "调用次数"), ("input_tokens", "输入token"), ("input_unit_price", "输入单价"),
+        ("input_cost", "输入费用"), ("output_tokens", "输出token"), ("output_unit_price", "输出单价"),
+        ("output_cost", "输出费用"), ("cache_read_tokens", "读取缓存token"),
+        ("cache_read_unit_price", "读取缓存单价"), ("cache_read_cost", "读取缓存费用"),
+        ("cache_create_5m_tokens", "创建缓存5M-token"), ("cache_create_5m_unit_price", "创建缓存5M单价"),
+        ("cache_create_5m_cost", "创建缓存5M费用"), ("cache_create_1h_tokens", "创建缓存1H-token"),
+        ("cache_create_1h_unit_price", "创建缓存1H单价"), ("cache_create_1h_cost", "创建缓存1H费用"),
+        ("cache_create_tokens", "创建缓存token"), ("cache_create_cost", "创建缓存费用"),
+        ("cache_total_tokens", "缓存总token"), ("cache_total_cost", "缓存总费用"),
+        ("total_tokens", "总消耗token"), ("total_cost", "消费额度"), ("platform_quota", "平台额度"),
+    ]
+    visible = [(k, l) for k, l in col_def if any(r.get(k) is not None for r in result)]
+    if fields:
+        try:
+            flds = {x["name"] for x in json.loads(fields)}
+            data_keys = set(k for k, _ in col_def if k not in FIELD_SQL)
+            visible = [(k, l) for k, l in visible if k in data_keys or k in flds]
+        except Exception:
+            pass
+    if group_by:
+        date_col = "period_day" if "day" in group_by else "period_month"
+        result.sort(key=lambda r: (r.get(date_col) or ""), reverse=True)
+    no_sum = {"period_month", "period_day", "user_id", "username", "channel_id",
+              "channel_name", "model_name", "group_name", "token_name",
+              "cn_buyer1", "cn_supplier1", "us_salesperson"}
+    sum_cols = [(ik, k) for ik, (k, _) in enumerate(visible) if k not in no_sum]
+
+    wb = openpyxl.Workbook(write_only=True)
+    ws = wb.create_sheet("Stats")
+    bold = Font(bold=True)
+    header = []
+    for _, label in visible:
+        c = WriteOnlyCell(ws, value=label)
+        c.font = bold
+        header.append(c)
+    ws.append(header)
+    for row in result:
+        vals = []
+        for key, _ in visible:
+            v = row.get(key)
+            vals.append(cell_value(float(v) if v is not None and hasattr(v, "__float__") else v))
+        ws.append(vals)
     total_row = ["合计"] + [""] * (len(visible) - 1)
     for ci, key in sum_cols:
-        sm = 0
-        for row in result:
-            v = row.get(key)
-            if v is not None and hasattr(v, "__float__"):
-                sm += float(v)
+        sm = sum(float(r.get(key)) for r in result if r.get(key) is not None and hasattr(r.get(key), "__float__"))
         if sm:
             total_row[ci] = sm
     ws.append([])
-    ws.append(total_row)
-
+    ws.append(sanitize_row(total_row))
     buf = io.BytesIO()
     wb.save(buf)
-    filename = f"{req.site}_{req.table_name}_sum.xlsx"
+    return buf.getvalue()
+
+
+@router.post("/export-async")
+async def export_stats_async(req: StatsRequest):
+    _gc_stats_export_tasks()
+    task_id = uuid.uuid4().hex[:8]
+    _STATS_EXPORT_TASKS[task_id] = {"status": "running", "file": None, "error": None,
+                                    "start": time.time(), "end": None}
+
+    async def _run():
+        t = _STATS_EXPORT_TASKS[task_id]
+        try:
+            result = await stats_service.query_stats(
+                req.site, req.table_name, req.group_by, req.filters, req.show_zero,
+                show_channel_name=req.show_channel_name,
+            )
+            if not result:
+                t["file"] = b""
+                t["status"] = "done"
+                return
+            loop = asyncio.get_running_loop()
+            content = await loop.run_in_executor(
+                None, _build_stats_bytes, result, req.group_by, req.fields,
+            )
+            t["file"] = content
+            t["status"] = "done"
+        except Exception as e:
+            t["status"] = "failed"
+            t["error"] = f"导出失败: {str(e)[:300]}"
+        finally:
+            t["end"] = time.time()
+
+    asyncio.create_task(_run())
+    return {"task_id": task_id}
+
+
+@router.get("/export-status")
+async def export_stats_status(task_id: str = Query(...)):
+    t = _STATS_EXPORT_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    elapsed = (t["end"] or time.time()) - t["start"]
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+
+
+@router.get("/export-download")
+async def export_stats_download(task_id: str = Query(...)):
+    t = _STATS_EXPORT_TASKS.get(task_id)
+    if not t:
+        raise HTTPException(404, detail="任务不存在或已过期")
+    if t["status"] != "done":
+        raise HTTPException(400, detail="文件尚未生成完毕")
+    content = t["file"]
+    _STATS_EXPORT_TASKS.pop(task_id, None)
     return Response(
-        content=buf.getvalue(),
+        content=content,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f"attachment; filename={filename}"},
+        headers={"Content-Disposition": "attachment; filename=stats_export.xlsx"},
     )
 
 
