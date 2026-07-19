@@ -1269,32 +1269,45 @@ async function _zipEntries(buf) {
 // ── Helpers ──
 
 async function exportViaFetch(url, fileName) {
+  // 先弹文件选择器(用户点击导出时有激活, 必须在 fetch 之前)
+  let saveHandle = null
+  if (window.showSaveFilePicker) {
+    try {
+      saveHandle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: 'Excel文件', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
+      })
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return
+    }
+  }
+
+  // 获取数据(可能耗时较长)
   const resp = await fetch(url)
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({ detail: resp.statusText }))
     throw new Error(err.detail || '导出失败')
   }
   const blob = await resp.blob()
-  // 尝试用 showSaveFilePicker 保存到指定位置(需用户激活)
-  if (window.showSaveFilePicker) {
-    try {
-      const handle = await window.showSaveFilePicker({
-        suggestedName: fileName,
-        types: [{ description: 'Excel文件', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
-      })
-      const writable = await handle.createWritable()
-      await writable.write(blob)
-      await writable.close()
-      ElMessage.success(`已保存到 ${handle.name}`)
-      _logExport('财务报表', fileName)
-      return
-    } catch (e) {
-      if (e instanceof DOMException && e.name === 'AbortError') return
-      // 失败回退
+
+  // 保存到选择的文件
+  let saved = false
+  if (saveHandle) {
+    const perm = saveHandle.queryPermission ? await saveHandle.queryPermission({ mode: 'readwrite' }) : 'granted'
+    if (perm === 'granted') {
+      try {
+        const writable = await saveHandle.createWritable()
+        await writable.write(blob)
+        await writable.close()
+        ElMessage.success(`已保存到 ${saveHandle.name}`)
+        saved = true
+      } catch (e) { /* 回退 */ }
     }
   }
-  downloadBlob(blob, fileName)
-  ElMessage.success('导出完成')
+  if (!saved) {
+    downloadBlob(blob, fileName)
+    ElMessage.success('导出完成')
+  }
   _logExport('财务报表', fileName)
 }
 
