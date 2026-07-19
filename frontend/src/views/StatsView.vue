@@ -509,16 +509,19 @@ async function doExport(format = 'xlsx') {
     const fnSum = `统计_${form.site}_${period}.xlsx`
     exportTimerText.value = ''
 
-    // 弹出文件夹选择框（选择前不计时）
-    let dirHandle
-    const supportsDir = typeof window.showDirectoryPicker === 'function'
-    if (supportsDir) {
+    // 弹出文件保存对话框（选择前不计时）
+    // 用 showSaveFilePicker 而非 showDirectoryPicker，因为后者 getFileHandle(create:true)
+    // 需要用户激活，异步轮询后已过期
+    let saveHandle = null
+    if (window.showSaveFilePicker) {
       try {
-        dirHandle = await window.showDirectoryPicker({ id: EXPORT_DIR_ID })
+        saveHandle = await window.showSaveFilePicker({
+          suggestedName: fnSum,
+          id: EXPORT_DIR_ID,
+          types: [{ description: 'Excel文件', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
+        })
       } catch (e) {
         if (e instanceof DOMException && e.name === 'AbortError') return
-        ElMessage.error('选择文件夹失败: ' + e.message)
-        return
       }
     }
 
@@ -540,30 +543,25 @@ async function doExport(format = 'xlsx') {
       }
       const { data: sumBlob } = await api.stats.exportDownload(td.task_id)
 
-      let dirSaved = false
-      if (dirHandle) {
-        // 检查权限(不需要用户激活), 已授权则直接写
-        const perm = dirHandle.queryPermission ? await dirHandle.queryPermission({ mode: 'readwrite' }) : 'granted'
+      let fileSaved = false
+      if (saveHandle) {
+        const perm = saveHandle.queryPermission ? await saveHandle.queryPermission({ mode: 'readwrite' }) : 'granted'
         if (perm === 'granted') {
           try {
-            const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
-            const w1 = await fh1.createWritable()
-            await w1.write(sumBlob)
-            await w1.close()
-            dirSaved = true
-          } catch (writeErr) {
-            // 写入失败, 回退
-          }
+            const writable = await saveHandle.createWritable()
+            await writable.write(sumBlob)
+            await writable.close()
+            ElMessage.success(`已保存到 ${saveHandle.name}`)
+            fileSaved = true
+          } catch (writeErr) { /* 回退 */ }
         }
       }
-      if (!dirSaved) {
+      if (!fileSaved) {
         downloadBlob(sumBlob, fnSum)
+        ElMessage.success('导出完成')
       }
       clearInterval(_timer)
       exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
-      if (dirHandle) {
-        ElMessage.success('全部导出完成')
-      }
       _logExport(`站点=${form.site} 表=${form.table_name} 粒度=${form.group_by.join(',')} 日期=${form.date_start}~${form.date_end}`)
     } catch (e) {
       clearInterval(_timer)
