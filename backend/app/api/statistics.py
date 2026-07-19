@@ -5,6 +5,10 @@ import io
 import json
 import logging
 import os
+import re
+import subprocess
+import sys
+import tempfile
 import time
 import uuid
 from pathlib import Path
@@ -12,6 +16,41 @@ from pathlib import Path
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import Response, FileResponse
 from app.services.export_helper import generate_xlsx_subprocess
+
+_XLSX_WORKER = os.path.join(os.path.dirname(os.path.dirname(__file__)), "services", "export_xlsx_worker.py")
+
+
+def _detail_where_sql(filters):
+    """构建 WHERE 字符串(值内联, 供 mysql -e 子进程)。"""
+    conditions = ["l.windup_type < 2"]
+    if filters:
+        for key, val in filters.items():
+            if not val:
+                continue
+            safe_val = str(val).replace("\\", "\\\\").replace("'", "\\'")
+            if key == 'date_start':
+                conditions.append(f"l.created_at+28800 >= UNIX_TIMESTAMP('{safe_val} 00:00:00')")
+            elif key == 'date_end':
+                conditions.append(f"l.created_at+28800 <= UNIX_TIMESTAMP('{safe_val} 23:59:59')")
+            elif re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', key):
+                conditions.append(f"l.`{key}` LIKE '%{safe_val}%'")
+    return " AND ".join(conditions)
+
+
+def _dump_detail_tsv(mc, db_name, sql, tsv_path):
+    """mysql 子进程: 执行 detail SQL → TSV 文件。"""
+    cmd = [
+        "mysql",
+        f"--host={mc.host}", f"--port={mc.port}",
+        f"--user={mc.user}", f"--password={mc.password}",
+        "--skip-ssl", "--batch",
+        "-e", sql,
+        db_name,
+    ]
+    with open(tsv_path, "wb") as fout:
+        proc = subprocess.run(cmd, stdout=fout, stderr=subprocess.PIPE, timeout=3600)
+    if proc.returncode != 0:
+        raise RuntimeError(f"detail TSV dump failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
 from pydantic import BaseModel
 import openpyxl
 from openpyxl.styles import Font
@@ -557,11 +596,13 @@ def _build_stats_bytes(result, group_by, fields):
 async def export_stats_async(req: StatsRequest):
     _gc_stats_export_tasks()
     task_id = uuid.uuid4().hex[:8]
-    _STATS_EXPORT_TASKS[task_id] = {"status": "running", "file": None, "error": None,
+    _STATS_EXPORT_TASKS[task_id] = {"status": "running", "file_path": None, "error": None,
+                                    "filename": "stats_export.xlsx",
                                     "start": time.time(), "end": None}
 
     async def _run():
         t = _STATS_EXPORT_TASKS[task_id]
+        tmp_files = []
         try:
             result = await stats_service.query_stats(
                 req.site, req.table_name, req.group_by, req.filters, req.show_zero,
@@ -570,7 +611,13 @@ async def export_stats_async(req: StatsRequest):
             if not result:
                 t["status"] = "done"
                 return
-            # 构建 spec (主进程, 轻量)
+
+            # 文件名: 统计_站点_周期.xlsx (去掉 logs 前缀)
+            period = req.table_name.replace("logs", "") if req.table_name.startswith("logs") else req.table_name
+            fname = f"统计_{req.site}_{period}.xlsx"
+            t["filename"] = fname
+
+            # 构建 summary spec
             col_def = [
                 ("period_month", "月份"), ("period_day", "日期"), ("user_id", "用户ID"),
                 ("username", "用户名"), ("channel_id", "渠道ID"), ("channel_name", "渠道"),
@@ -598,24 +645,64 @@ async def export_stats_async(req: StatsRequest):
             if req.group_by:
                 dc = "period_day" if "day" in req.group_by else "period_month"
                 result.sort(key=lambda r: (r.get(dc) or ""), reverse=True)
-            no_sum = {"period_month", "period_day", "user_id", "username", "channel_id",
-                      "channel_name", "model_name", "group_name", "token_name",
-                      "cn_buyer1", "cn_supplier1", "us_salesperson"}
-            spec = {"sheets": [{
-                "name": "Stats",
+
+            summary_spec = {"sheets": [{
+                "name": "数据统计",
                 "columns": [{"name": k, "label": l} for k, l in visible],
                 "rows": result,
-                "total_fields": [k for k, _ in visible if k not in no_sum],
             }]}
-            # 子进程生成 xlsx (不占 uvicorn GIL)
+
             loop = asyncio.get_running_loop()
-            xlsx_path = await generate_xlsx_subprocess(loop, spec)
-            t["file_path"] = xlsx_path
+            config = AppConfig.load()
+            mc = config.mysql
+            db_name = config.db_name(req.site)
+
+            if req.show_log_detail:
+                # ── 合并导出: 统计 sheet + 明细 sheets ──
+                # 1. 写 summary spec JSON
+                spec_path = tempfile.mktemp(suffix=".json")
+                tmp_files.append(spec_path)
+                with open(spec_path, "w", encoding="utf-8") as f:
+                    json.dump(summary_spec, f, ensure_ascii=False, default=str)
+
+                # 2. detail SQL + mysql TSV dump
+                detail_cols = _build_detail_columns(req.show_channel_name, req.fields)
+                where = _detail_where_sql(req.filters)
+                detail_sql = _build_detail_sql(req.table_name, detail_cols, req.show_channel_name, where)
+                tsv_path = tempfile.mktemp(suffix=".tsv")
+                tmp_files.append(tsv_path)
+                await loop.run_in_executor(None, _dump_detail_tsv, mc, db_name, detail_sql, tsv_path)
+
+                # 3. detail columns JSON (name=label, 因为 mysql --batch 用 SQL 别名做表头)
+                detail_cols_json = json.dumps([{"name": c["label"], "label": c["label"]} for c in detail_cols])
+
+                # 4. 调 worker (4 参数: tsv, xlsx, detail_cols_json, spec_path)
+                xlsx_path = tempfile.mktemp(suffix=".xlsx")
+                def _run_combined():
+                    return subprocess.run(
+                        [sys.executable, _XLSX_WORKER, tsv_path, xlsx_path, detail_cols_json, spec_path],
+                        capture_output=True, timeout=3600,
+                    )
+                proc = await loop.run_in_executor(None, _run_combined)
+                if proc.returncode != 0:
+                    raise RuntimeError(f"xlsx worker failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
+                t["file_path"] = xlsx_path
+            else:
+                # ── 仅统计 ──
+                xlsx_path = await generate_xlsx_subprocess(loop, summary_spec)
+                t["file_path"] = xlsx_path
+
             t["status"] = "done"
         except Exception as e:
             t["status"] = "failed"
             t["error"] = f"导出失败: {str(e)[:300]}"
         finally:
+            # 清理临时文件(xlsx 除外)
+            for tf in tmp_files:
+                try:
+                    os.unlink(tf)
+                except OSError:
+                    pass
             t["end"] = time.time()
 
     asyncio.create_task(_run())
@@ -639,10 +726,11 @@ async def export_stats_download(task_id: str = Query(...)):
     if t["status"] != "done":
         raise HTTPException(400, detail="文件尚未生成完毕")
     file_path = t.get("file_path")
+    filename = t.get("filename", "stats_export.xlsx")
     _STATS_EXPORT_TASKS.pop(task_id, None)
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(500, detail="导出文件不存在")
-    return FileResponse(path=file_path, filename="stats_export.xlsx",
+    return FileResponse(path=file_path, filename=filename,
                         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 

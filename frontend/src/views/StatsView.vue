@@ -500,12 +500,13 @@ async function doExport(format = 'xlsx') {
     filters: Object.keys(filters).length ? filters : null,
     show_zero: form.show_zero,
     show_channel_name: showChannelName.value,
+    show_log_detail: showLogDetail.value,
     fields: JSON.stringify(exportFields.value),
   }
 
   if (format === 'xlsx') {
-    const fnSum = `${form.site}_${form.table_name}_sum.xlsx`
-    const fnDetail = `${form.site}_${form.table_name}_明细.xlsx`
+    const period = form.table_name.replace(/^logs/, '')
+    const fnSum = `统计_${form.site}_${period}.xlsx`
     exportTimerText.value = ''
 
     // 弹出文件夹选择框（选择前不计时）
@@ -549,9 +550,6 @@ async function doExport(format = 'xlsx') {
             const w1 = await fh1.createWritable()
             await w1.write(sumBlob)
             await w1.close()
-            if (showLogDetail.value) {
-              await _exportDetail(dirHandle, fnDetail, body)
-            }
             dirSaved = true
           } catch (writeErr) {
             // 写入失败, 回退
@@ -560,9 +558,6 @@ async function doExport(format = 'xlsx') {
       }
       if (!dirSaved) {
         downloadBlob(sumBlob, fnSum)
-        if (showLogDetail.value) {
-          await _exportDetail(null, fnDetail, body)
-        }
       }
       clearInterval(_timer)
       exportTimerText.value = `耗时 ${((Date.now() - t0) / 1000).toFixed(1)}s`
