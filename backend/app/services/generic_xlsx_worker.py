@@ -18,8 +18,16 @@ spec JSON 格式:
 }
 """
 import sys
+import os
 import json
+import time
 import openpyxl
+
+# 降低进程优先级，不抢占 uvicorn CPU
+try:
+    os.nice(10)
+except OSError:
+    pass
 
 
 def _convert(val):
@@ -57,8 +65,12 @@ def main():
         ws.append([c["label"] for c in cols])
 
         # 数据行
+        row_num = 0
         for row in sheet_spec.get("rows", []):
             ws.append([_convert(row.get(cn)) for cn in col_names])
+            row_num += 1
+            if row_num % 10000 == 0:
+                time.sleep(0.001)
 
         # 合计行(可选)
         total_fields = sheet_spec.get("total_fields")
