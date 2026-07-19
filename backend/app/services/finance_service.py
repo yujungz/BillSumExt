@@ -471,31 +471,35 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
                       show_model: bool = False, show_token: bool = False,
                       with_total_cost: bool = True,
                       monthly_settle: bool = False):
-    """Generate xlsx file with streaming writes and multi-sheet splitting."""
-    import openpyxl
-    from openpyxl.styles import Font, Alignment
+    """Generate xlsx file via subprocess (avoids GIL blocking uvicorn)."""
+    import json as _json
+    import subprocess as _sp
+    import sys as _sys
+    import os as _os
+    import asyncio as _asyncio
 
     task = _export_tasks[task_id]
     config = AppConfig.load()
     db_name = config.db_name(site)
+    mc = config.mysql
     dw, dp = _date_where(date_start, date_end)
 
-    # 1. Fetch monthly & daily (small datasets)
+    # 1. Fetch monthly & daily (small datasets, async)
     task["progress"] = "查询汇总数据..."
     monthly = await user_monthly(site, table, username, date_start, date_end, show_model,
                                  with_platform, with_total_cost, monthly_settle)
     daily = await user_daily(site, table, username, date_start, date_end, show_model, show_token)
 
-    # 2. Count detail rows (skipped entirely when detail not requested)
+    # 2. Count detail rows
+    uw, up = _user_where(username)
     if not with_detail:
         detail_total = 0
     else:
-        uw, up = _user_where(username)
         count_sql = f"SELECT COUNT(*) AS total FROM `{table}` l WHERE l.windup_type < 2{uw}{dw}"
         count_row = await db.fetch_one(count_sql, up + dp, db=db_name)
         detail_total = count_row["total"] if count_row else 0
 
-    # 3. Build Excel with write-only workbook
+    # 3. Strip platform/cost columns
     _PLATFORM_KEYS = {"平台额度"}
     if not with_platform:
         monthly = _strip_platform(monthly, _PLATFORM_KEYS)
@@ -505,135 +509,166 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
         daily = _strip_platform(daily, {"消费额度"})
 
     total_summary = (["消费额度"] if with_total_cost else []) + (["平台额度"] if with_platform else [])
-    total_detail_fields = (["消费额度"] if with_total_cost else []) + (["平台额度"] if with_platform else [])
 
-    wb = openpyxl.Workbook(write_only=True)
-
-    # Monthly sheet (small)
+    # 4. Build spec JSON for summary sheets (monthly + daily)
+    summary_sheets = []
     if monthly:
-        ws_month = wb.create_sheet("月汇总")
-        _write_sheet_streaming(ws_month, monthly, total_summary)
-
-    # Daily sheet (small)
+        m_headers = list(monthly[0].keys())
+        summary_sheets.append({
+            "name": "月汇总",
+            "columns": [{"name": h, "label": h} for h in m_headers],
+            "rows": monthly,
+            "total_fields": total_summary,
+        })
     if daily:
-        ws_daily = wb.create_sheet("日统计")
-        _write_sheet_streaming(ws_daily, daily, total_summary)
+        d_headers = list(daily[0].keys())
+        summary_sheets.append({
+            "name": "日统计",
+            "columns": [{"name": h, "label": h} for h in d_headers],
+            "rows": daily,
+            "total_fields": total_summary,
+        })
 
-    # Detail sheets — chunked reads, multi-sheet splitting
-    if detail_total > 0:
-        task["progress"] = f"导出明细 0/{detail_total}"
+    loop = _asyncio.get_running_loop()
+    tmp_files = []
+    file_path = os.path.join(tempfile.gettempdir(), "BillSumExt_export", f"{task_id}.xlsx")
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
 
-        detail_sql = f"""
-        SELECT
-          l.id AS `序号`,
-          l.user_id AS `用户ID`,
-          l.username AS `用户名`,
-          l.token_name AS `Token名称`,
-          l.model_name AS `模型名`,
-          DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%Y-%%m-%%d %%H:%%i:%%s') AS `时间`,
-          l.prompt_tokens AS `输入token`,
-          ROUND(l.model_ratio*2, 6) AS `输入单价`,
-          ROUND(l.group_ratio*l.model_ratio*2*l.prompt_tokens/1000000, 6) AS `输入费用`,
-          l.completion_tokens AS `输出token`,
-          ROUND(l.model_ratio*2*l.completion_ratio, 6) AS `输出单价`,
-          ROUND(l.group_ratio*l.model_ratio*2*l.completion_ratio*l.completion_tokens/1000000, 6) AS `输出费用`,
-          l.cache_tokens AS `读取缓存token`,
-          ROUND(l.model_ratio*2*l.cache_ratio, 6) AS `读取缓存单价`,
-          ROUND(l.group_ratio*l.model_ratio*2*l.cache_ratio*l.cache_tokens/1000000, 6) AS `读取缓存费用`,
-          l.cache_creation_tokens_5m AS `创建缓存5M-token`,
-          ROUND(l.model_ratio*2*1.25, 6) AS `创建缓存5M单价`,
-          ROUND(l.group_ratio*l.model_ratio*2*1.25*l.cache_creation_tokens_5m/1000000, 6) AS `创建缓存5M费用`,
-          {_1H_CASE} AS `创建缓存1H-token`,
-          ROUND(l.model_ratio*2*2.00, 6) AS `创建缓存1H单价`,
-          ROUND(l.group_ratio*l.model_ratio*2*2.00*{_1H_CASE}/1000000, 6) AS `创建缓存1H费用`,
-          {_GREATEST} AS `创建缓存token`,
-          ROUND(l.group_ratio*l.model_ratio*2*(1.25*l.cache_creation_tokens_5m
-            +2.00*{_1H_CASE})/1000000, 6) AS `创建缓存费用`,
-          {_GREATEST}+l.cache_tokens AS `缓存总token`,
-          ROUND(l.group_ratio*l.model_ratio*2*(1.25*l.cache_creation_tokens_5m
-            +l.cache_ratio*l.cache_tokens
-            +2.00*{_1H_CASE})/1000000, 6) AS `缓存总费用`,
-          {_GREATEST}+l.cache_tokens+l.completion_tokens+l.prompt_tokens AS `总消耗token`,
-          ROUND(l.group_ratio*l.model_ratio*2*(l.prompt_tokens
-            +l.completion_ratio*l.completion_tokens
-            +l.cache_ratio*l.cache_tokens
-            +1.25*l.cache_creation_tokens_5m
-            +2.00*{_1H_CASE})/1000000, 6) AS `消费额度`,
-          l.quota*2/1000000 AS `平台额度`
-        FROM `{table}` l
-        WHERE l.windup_type < 2{uw}{dw}
-        ORDER BY l.created_at DESC
-        LIMIT %s OFFSET %s
-        """
+    try:
+        if detail_total > 0 and with_detail:
+            # ── 合并导出: summary sheets + detail sheets via subprocess ──
+            task["progress"] = f"导出明细 0/{detail_total}"
 
-        # Strip platform columns from detail if needed
-        strip_keys = {"平台额度"} if not with_platform else set()
-        headers_written = False
-        headers = None
-        ws_detail = None
-        sheet_idx = 0
-        rows_in_sheet = 0
-        exported = 0
+            # 4a. Write summary spec to temp JSON
+            spec_path = tempfile.mktemp(suffix=".json")
+            tmp_files.append(spec_path)
+            with open(spec_path, "w", encoding="utf-8") as f:
+                _json.dump({"sheets": summary_sheets}, f, ensure_ascii=False, default=str)
 
-        offset = 0
-        while offset < detail_total:
-            chunk = await db.fetch_all(
-                detail_sql, up + dp + [_CHUNK_SIZE, offset], db=db_name
-            )
-            if not chunk:
-                break
+            # 4b. Build detail SQL for mysql subprocess
+            detail_sql = f"""
+            SELECT
+              l.id AS `序号`,
+              l.user_id AS `用户ID`,
+              l.username AS `用户名`,
+              l.token_name AS `Token名称`,
+              l.model_name AS `模型名`,
+              DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%Y-%%m-%%d %%H:%%i:%%s') AS `时间`,
+              l.prompt_tokens AS `输入token`,
+              ROUND(l.model_ratio*2, 6) AS `输入单价`,
+              ROUND(l.group_ratio*l.model_ratio*2*l.prompt_tokens/1000000, 6) AS `输入费用`,
+              l.completion_tokens AS `输出token`,
+              ROUND(l.model_ratio*2*l.completion_ratio, 6) AS `输出单价`,
+              ROUND(l.group_ratio*l.model_ratio*2*l.completion_ratio*l.completion_tokens/1000000, 6) AS `输出费用`,
+              l.cache_tokens AS `读取缓存token`,
+              ROUND(l.model_ratio*2*l.cache_ratio, 6) AS `读取缓存单价`,
+              ROUND(l.group_ratio*l.model_ratio*2*l.cache_ratio*l.cache_tokens/1000000, 6) AS `读取缓存费用`,
+              l.cache_creation_tokens_5m AS `创建缓存5M-token`,
+              ROUND(l.model_ratio*2*1.25, 6) AS `创建缓存5M单价`,
+              ROUND(l.group_ratio*l.model_ratio*2*1.25*l.cache_creation_tokens_5m/1000000, 6) AS `创建缓存5M费用`,
+              {_1H_CASE} AS `创建缓存1H-token`,
+              ROUND(l.model_ratio*2*2.00, 6) AS `创建缓存1H单价`,
+              ROUND(l.group_ratio*l.model_ratio*2*2.00*{_1H_CASE}/1000000, 6) AS `创建缓存1H费用`,
+              {_GREATEST} AS `创建缓存token`,
+              ROUND(l.group_ratio*l.model_ratio*2*(1.25*l.cache_creation_tokens_5m
+                +2.00*{_1H_CASE})/1000000, 6) AS `创建缓存费用`,
+              {_GREATEST}+l.cache_tokens AS `缓存总token`,
+              ROUND(l.group_ratio*l.model_ratio*2*(1.25*l.cache_creation_tokens_5m
+                +l.cache_ratio*l.cache_tokens
+                +2.00*{_1H_CASE})/1000000, 6) AS `缓存总费用`,
+              {_GREATEST}+l.cache_tokens+l.completion_tokens+l.prompt_tokens AS `总消耗token`,
+              ROUND(l.group_ratio*l.model_ratio*2*(l.prompt_tokens
+                +l.completion_ratio*l.completion_tokens
+                +l.cache_ratio*l.cache_tokens
+                +1.25*l.cache_creation_tokens_5m
+                +2.00*{_1H_CASE})/1000000, 6) AS `消费额度`""" \
+              + (",\n              l.quota*2/1000000 AS `平台额度`" if with_platform else "") \
+              + f"""
+            FROM `{table}` l
+            WHERE l.windup_type < 2{uw}{dw}
+            ORDER BY l.created_at DESC"""
 
-            for row in chunk:
-                # Start new sheet if needed
-                if ws_detail is None or rows_in_sheet >= _MAX_ROWS_PER_SHEET:
-                    sheet_idx += 1
-                    sheet_name = "用户明细" if sheet_idx == 1 else f"用户明细_{sheet_idx}"
-                    ws_detail = wb.create_sheet(sheet_name)
-                    headers_written = False
-                    rows_in_sheet = 0
+            # Strip platform/cost from detail if needed
+            strip_detail = []
+            if not with_platform:
+                strip_detail.append("平台额度")
+            if not with_total_cost:
+                strip_detail.append("消费额度")
+            if strip_detail:
+                for col in strip_detail:
+                    detail_sql = detail_sql.replace(f",\n              {col.split('`')[1] if '`' in col else col}", "")
+                    # Simpler: just filter columns in the worker
+                # Build column list excluding stripped columns
+                all_detail_cols = ["序号","用户ID","用户名","Token名称","模型名","时间",
+                    "输入token","输入单价","输入费用","输出token","输出单价","输出费用",
+                    "读取缓存token","读取缓存单价","读取缓存费用","创建缓存5M-token","创建缓存5M单价","创建缓存5M费用",
+                    "创建缓存1H-token","创建缓存1H单价","创建缓存1H费用","创建缓存token","创建缓存费用",
+                    "缓存总token","缓存总费用","总消耗token","消费额度","平台额度"]
+                detail_cols_filtered = [c for c in all_detail_cols if c not in strip_detail]
+            else:
+                detail_cols_filtered = ["序号","用户ID","用户名","Token名称","模型名","时间",
+                    "输入token","输入单价","输入费用","输出token","输出单价","输出费用",
+                    "读取缓存token","读取缓存单价","读取缓存费用","创建缓存5M-token","创建缓存5M单价","创建缓存5M费用",
+                    "创建缓存1H-token","创建缓存1H单价","创建缓存1H费用","创建缓存token","创建缓存费用",
+                    "缓存总token","缓存总费用","总消耗token","消费额度","平台额度"]
 
-                if not headers_written:
-                    headers = [k for k in row.keys() if k not in strip_keys]
-                    # Header row with bold style
-                    header_cells = [openpyxl.cell.Cell(ws_detail, column=i+1, value=h) for i, h in enumerate(headers)]
-                    for c in header_cells:
-                        c.font = Font(bold=True)
-                        c.alignment = Alignment(horizontal="center")
-                    ws_detail.append(header_cells)
-                    headers_written = True
+            detail_cols_json = _json.dumps([{"name": c, "label": c} for c in detail_cols_filtered])
 
-                vals = [row[k] for k in headers]
-                ws_detail.append(vals)
-                rows_in_sheet += 1
+            # 4c. mysql TSV dump (subprocess, no Python GIL)
+            tsv_path = tempfile.mktemp(suffix=".tsv")
+            tmp_files.append(tsv_path)
+            mysql_cmd = [
+                "mysql",
+                f"--host={mc.host}", f"--port={mc.port}",
+                f"--user={mc.user}", f"--password={mc.password}",
+                "--skip-ssl", "--batch",
+                "-e", detail_sql,
+                db_name,
+            ]
+            def _dump_tsv():
+                with open(tsv_path, "wb") as fout:
+                    proc = _sp.run(mysql_cmd, stdout=fout, stderr=_sp.PIPE, timeout=3600)
+                return proc
+            await loop.run_in_executor(None, _dump_tsv)
 
-            exported += len(chunk)
-            offset += _CHUNK_SIZE
-            task["progress"] = f"导出明细 {exported}/{detail_total}"
+            # 4d. Call export_xlsx_worker.py (subprocess, no GIL)
+            worker = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "services", "export_xlsx_worker.py")
+            def _run_worker():
+                return _sp.run(
+                    [_sys.executable, worker, tsv_path, file_path, detail_cols_json, spec_path],
+                    capture_output=True, timeout=3600,
+                )
+            proc = await loop.run_in_executor(None, _run_worker)
+            if proc.returncode != 0:
+                raise RuntimeError(f"xlsx worker failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
 
-        # Append total row to last detail sheet
-        if ws_detail and headers:
-            # Collect index of total fields
-            total_row_vals = ["合计"] + ["" for _ in range(len(headers) - 1)]
-            for field in total_detail_fields:
-                if field in headers:
-                    ci = headers.index(field) + 1
-                    cl = openpyxl.utils.get_column_letter(ci)
-                    total_row_vals[ci - 1] = f"=SUM({cl}2:{cl}{rows_in_sheet + 1})"
-            ws_detail.append([])
-            ws_detail.append(total_row_vals)
+        else:
+            # ── 仅汇总(无明细): 用 generic_xlsx_worker ──
+            from app.services.export_helper import generate_xlsx_subprocess
+            spec = {"sheets": summary_sheets}
+            xlsx_path = await generate_xlsx_subprocess(loop, spec)
+            import shutil
+            shutil.move(xlsx_path, file_path)
 
-    # 4. Save to temp file
-    tmp_dir = os.path.join(tempfile.gettempdir(), "BillSumExt_export")
-    os.makedirs(tmp_dir, exist_ok=True)
-    file_path = os.path.join(tmp_dir, f"{task_id}.xlsx")
-    log.info(f"[export-{task_id}] Saving xlsx to {file_path}, monthly={len(monthly)}, daily={len(daily)}, detail={detail_total}")
-    wb.save(file_path)
-    file_size = os.path.getsize(file_path)
-    log.info(f"[export-{task_id}] Saved, file_size={file_size}")
+        file_size = os.path.getsize(file_path)
+        log.info(f"[export-{task_id}] Saved, file_size={file_size}, detail={detail_total}")
+        task["status"] = "done"
 
-    task["status"] = "done"
+    except Exception as e:
+        log.exception(f"[export-{task_id}] Failed: {e}")
+        task["status"] = "failed"
+        task["error"] = str(e)[:500]
+    finally:
+        # Clean up temp files (not the xlsx)
+        for tf in tmp_files:
+            try:
+                os.unlink(tf)
+            except OSError:
+                pass
+        task["end_time"] = time.time()
+        task["progress"] = f"完成 ({detail_total} 条明细)"
+
     task["file_path"] = file_path
-    task["end_time"] = time.time()
     task["progress"] = f"完成 ({detail_total} 条明细)"
 
 
