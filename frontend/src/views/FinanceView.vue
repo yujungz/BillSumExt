@@ -1269,33 +1269,16 @@ async function _zipEntries(buf) {
 // ── Helpers ──
 
 async function exportViaFetch(url, fileName) {
-  if (window.showSaveFilePicker) {
-    const handle = await window.showSaveFilePicker({
-      suggestedName: fileName,
-      types: [{ description: 'Excel文件', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
-    })
-    const resp = await fetch(url)
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-      throw new Error(err.detail || '导出失败')
-    }
-    const blob = await resp.blob()
-    const writable = await handle.createWritable()
-    await writable.write(blob)
-    await writable.close()
-    ElMessage.success(`已保存到 ${handle.name}`)
-    _logExport('财务报表', fileName)
-  } else {
-    const resp = await fetch(url)
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({ detail: resp.statusText }))
-      throw new Error(err.detail || '导出失败')
-    }
-    const blob = await resp.blob()
-    downloadBlob(blob, fileName)
-    ElMessage.success('导出完成')
-    _logExport('财务报表', fileName)
+  const resp = await fetch(url)
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }))
+    throw new Error(err.detail || '导出失败')
   }
+  const blob = await resp.blob()
+  // 始终用浏览器下载(避免异步后 user activation 过期)
+  downloadBlob(blob, fileName)
+  ElMessage.success('导出完成')
+  _logExport('财务报表', fileName)
 }
 
 function downloadBlob(blob, filename) {

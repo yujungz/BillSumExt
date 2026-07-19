@@ -539,16 +539,23 @@ async function doExport(format = 'xlsx') {
       }
       const { data: sumBlob } = await api.stats.exportDownload(td.task_id)
 
+      let dirSaved = false
       if (dirHandle) {
-        try { await dirHandle.requestPermission({ mode: 'readwrite' }) } catch {}
-        const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
-        const w1 = await fh1.createWritable()
-        await w1.write(sumBlob)
-        await w1.close()
-        if (showLogDetail.value) {
-          await _exportDetail(dirHandle, fnDetail, body)
+        try {
+          await dirHandle.requestPermission({ mode: 'readwrite' })
+          const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
+          const w1 = await fh1.createWritable()
+          await w1.write(sumBlob)
+          await w1.close()
+          if (showLogDetail.value) {
+            await _exportDetail(dirHandle, fnDetail, body)
+          }
+          dirSaved = true
+        } catch (dirErr) {
+          // 异步轮询后用户激活已过期，回退到浏览器下载
         }
-      } else {
+      }
+      if (!dirSaved) {
         downloadBlob(sumBlob, fnSum)
         if (showLogDetail.value) {
           await _exportDetail(null, fnDetail, body)

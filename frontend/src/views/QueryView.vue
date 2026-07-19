@@ -482,13 +482,20 @@ async function exportConfirm(format) {
 
     // 下载文件
     const { data: blob } = await api.query.exportDownload(td.task_id)
+    let fileSaved = false
     if (saveHandle) {
-      try { await saveHandle.requestPermission({ mode: 'readwrite' }) } catch {}
-      const writable = await saveHandle.createWritable()
-      await writable.write(blob)
-      await writable.close()
-      ElMessage.success(`已保存到 ${saveHandle.name}`)
-    } else {
+      try {
+        await saveHandle.requestPermission({ mode: 'readwrite' })
+        const writable = await saveHandle.createWritable()
+        await writable.write(blob)
+        await writable.close()
+        ElMessage.success(`已保存到 ${saveHandle.name}`)
+        fileSaved = true
+      } catch (permErr) {
+        // 异步轮询后用户激活已过期，回退到浏览器下载
+      }
+    }
+    if (!fileSaved) {
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
