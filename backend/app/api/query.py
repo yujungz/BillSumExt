@@ -279,7 +279,11 @@ async def export_table_async(
                 except OSError:
                     pass
                 if proc.returncode != 0:
-                    raise RuntimeError(f"xlsx worker failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
+                    stderr_msg = proc.stderr.decode('utf-8', errors='replace')[:500] if proc.stderr else '(no stderr)'
+                    raise RuntimeError(f"xlsx worker failed (exit={proc.returncode}): {stderr_msg}")
+                # 验证文件非空
+                if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
+                    raise RuntimeError("xlsx worker 生成文件为空(0 字节)")
                 t["media"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 t["fn"] = f"{fn}.xlsx"
 
