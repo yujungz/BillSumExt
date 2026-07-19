@@ -6,52 +6,6 @@
         <span v-if="financeQueryElapsed != null" class="query-elapsed">查询耗时 {{ financeQueryElapsed }}s</span>
       </template>
       <el-tabs v-model="activeTab" class="finance-tabs">
-        <!-- Tab 1: 供应商对账 -->
-        <el-tab-pane label="供应商对账" name="supplier">
-          <div class="tab-layout">
-            <el-form :model="supplierForm" label-width="100px" inline>
-              <el-form-item label="站点">
-                <el-select v-model="supplierForm.site" @change="onSiteChange" placeholder="选择站点" style="width: 140px">
-                  <el-option v-for="s in sites" :key="s" :label="s" :value="s" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="日志表">
-                <el-select v-model="supplierForm.table" @change="onTableChange" placeholder="选择日志表" style="width: 260px">
-                  <el-option v-for="t in logTables" :key="t" :label="t" :value="t" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="用户名">
-                <el-select v-model="supplierForm.username" filterable placeholder="选择用户名" style="width: 180px">
-                  <el-option label="全部" value="" />
-                  <el-option v-for="u in usernames" :key="u" :label="u" :value="u" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="起始日期">
-                <el-date-picker v-model="supplierForm.dateStart" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
-              </el-form-item>
-              <el-form-item label="截止日期">
-                <el-date-picker v-model="supplierForm.dateEnd" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
-              </el-form-item>
-              <el-form-item label="供应商名称">
-                <el-input v-model="supplierForm.supplierName" placeholder="留空则用 cn_supplier1" clearable style="width: 160px" />
-              </el-form-item>
-              <el-form-item>
-                <el-button type="primary" :loading="supplierLoading" @click="doSupplierQuery">查询</el-button>
-                <el-button :loading="exportLoading" @click="doSupplierExport">导出</el-button>
-                <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
-              </el-form-item>
-            </el-form>
-
-            <div ref="supplierTableWrapper" class="table-wrapper">
-              <el-table :data="supplierData" border stripe :height="supplierTableHeight" v-loading="supplierLoading"
-                :element-loading-text="supplierLoadingText || '加载中'"
-                style="width: 100%" show-overflow-tooltip>
-                <el-table-column v-for="col in supplierColumns" :key="col.key" :prop="col.key" :label="col.label"
-                  :width="col.width" :formatter="col.formatter" />
-              </el-table>
-            </div>
-          </div>
-        </el-tab-pane>
 
         <!-- Tab 2: 用户统计 -->
         <el-tab-pane label="用户统计" name="userStats">
@@ -215,6 +169,53 @@
                 <el-table-column prop="" label="文件路径">
                   <template #default="{ row }">{{ row }}</template>
                 </el-table-column>
+              </el-table>
+            </div>
+          </div>
+        </el-tab-pane>
+
+        <!-- Tab 3: 供应商对账 -->
+        <el-tab-pane label="供应商对账" name="supplier">
+          <div class="tab-layout">
+            <el-form :model="supplierForm" label-width="100px" inline>
+              <el-form-item label="站点">
+                <el-select v-model="supplierForm.site" @change="onSiteChange" placeholder="选择站点" style="width: 140px">
+                  <el-option v-for="s in sites" :key="s" :label="s" :value="s" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="日志表">
+                <el-select v-model="supplierForm.table" @change="onTableChange" placeholder="选择日志表" style="width: 260px">
+                  <el-option v-for="t in logTables" :key="t" :label="t" :value="t" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="用户名">
+                <el-select v-model="supplierForm.username" filterable placeholder="选择用户名" style="width: 180px">
+                  <el-option label="全部" value="" />
+                  <el-option v-for="u in usernames" :key="u" :label="u" :value="u" />
+                </el-select>
+              </el-form-item>
+              <el-form-item label="起始日期">
+                <el-date-picker v-model="supplierForm.dateStart" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
+              </el-form-item>
+              <el-form-item label="截止日期">
+                <el-date-picker v-model="supplierForm.dateEnd" type="date" value-format="YYYY-MM-DD" style="width: 160px" />
+              </el-form-item>
+              <el-form-item label="供应商名称">
+                <el-input v-model="supplierForm.supplierName" placeholder="留空则用 cn_supplier1" clearable style="width: 160px" />
+              </el-form-item>
+              <el-form-item>
+                <el-button type="primary" :loading="supplierLoading" @click="doSupplierQuery">查询</el-button>
+                <el-button :loading="exportLoading" @click="doSupplierExport">导出</el-button>
+                <span v-if="exportTimerText" class="export-timer">{{ exportTimerText }}</span>
+              </el-form-item>
+            </el-form>
+
+            <div ref="supplierTableWrapper" class="table-wrapper">
+              <el-table :data="supplierData" border stripe :height="supplierTableHeight" v-loading="supplierLoading"
+                :element-loading-text="supplierLoadingText || '加载中'"
+                style="width: 100%" show-overflow-tooltip>
+                <el-table-column v-for="col in supplierColumns" :key="col.key" :prop="col.key" :label="col.label"
+                  :width="col.width" :formatter="col.formatter" />
               </el-table>
             </div>
           </div>
