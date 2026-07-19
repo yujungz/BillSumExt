@@ -614,7 +614,7 @@ async def export_stats_async(req: StatsRequest):
 
             # 文件名: 统计_站点_周期.xlsx (去掉 logs 前缀)
             period = req.table_name.replace("logs", "") if req.table_name.startswith("logs") else req.table_name
-            fname = f"统计_{req.site}_{period}.xlsx"
+            fname = f"{req.site}_统计_{period}.xlsx"
             t["filename"] = fname
 
             # 构建 summary spec

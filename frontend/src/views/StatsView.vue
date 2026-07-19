@@ -506,7 +506,7 @@ async function doExport(format = 'xlsx') {
 
   if (format === 'xlsx') {
     const period = form.table_name.replace(/^logs/, '')
-    const fnSum = `统计_${form.site}_${period}.xlsx`
+    const fnSum = `${form.site}_统计_${period}.xlsx`
     exportTimerText.value = ''
 
     // 弹出文件保存对话框（选择前不计时）
