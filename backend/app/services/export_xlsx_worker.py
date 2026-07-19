@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Standalone xlsx export worker — 直接生成 XML(不依赖 openpyxl), 5-10x 更快更低 CPU。
+"""Standalone xlsx export worker — 直接生成 XML(不依赖 openpyxl), 支持百万行分 sheet。
 
 Usage:
     python export_xlsx_worker.py <tsv_path> <xlsx_path> <columns_json>
 
-读取 mysql --batch 的 TSV 输出，直接拼 XML 生成 xlsx(跳过 openpyxl 对象层)。
-每 10000 行 sleep 1ms 让出 CPU；os.nice 降低调度优先级。
+读取 mysql --batch 的 TSV 输出，直接拼 XML 生成 xlsx。
+每 100 万行自动分 sheet（Data / Data_2 / Data_3 ...）。
 """
 import sys
 import os
@@ -14,21 +14,16 @@ import time
 import zipfile
 import tempfile
 
-# 降低进程优先级，不抢占 uvicorn CPU
+# 降低进程优先级
 try:
     os.nice(10)
 except OSError:
     pass
 
-# xlsx 常量 XML
-_CT = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>'
-_RELS = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
-_WB = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/></sheets></workbook>'
-_WB_RELS = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>'
+MAX_ROWS_PER_SHEET = 1000000
 
 
 def _col_letter(n):
-    """1→A, 26→Z, 27→AA"""
     r = ""
     while n > 0:
         n, rem = divmod(n - 1, 26)
@@ -37,12 +32,10 @@ def _col_letter(n):
 
 
 def _esc(s):
-    """XML 转义"""
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def _num_str(val):
-    """尝试返回数值字符串, 非数返回 None"""
     if val in ("NULL", "\\N", "", None):
         return None
     try:
@@ -53,7 +46,6 @@ def _num_str(val):
 
 
 def _row_xml(row_num, values):
-    """拼一行 XML"""
     parts = [f'<row r="{row_num}">']
     for ci, val in enumerate(values):
         cell_ref = f"{_col_letter(ci + 1)}{row_num}"
@@ -79,46 +71,95 @@ def main():
     col_names = [c["name"] for c in columns]
     col_labels = [c["label"] for c in columns]
 
-    # 写 sheet XML 到临时文件(流式, 低内存)
-    sheet_tmp = tempfile.mktemp(suffix=".xml")
-    with open(sheet_tmp, "w", encoding="utf-8") as sf:
-        sf.write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
-        sf.write('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
+    sheet_files = []  # 临时 XML 文件路径列表
+    sheet_names = []  # sheet 显示名
 
-        # 表头
-        sf.write(_row_xml(1, col_labels))
+    with open(tsv_path, "r", encoding="utf-8", errors="replace") as tf:
+        header = tf.readline().rstrip("\n").split("\t")
+        col_idx = []
+        for cn in col_names:
+            try:
+                col_idx.append(header.index(cn))
+            except ValueError:
+                col_idx.append(-1)
 
-        with open(tsv_path, "r", encoding="utf-8", errors="replace") as tf:
-            # mysql --batch 第一行是列名
-            header = tf.readline().rstrip("\n").split("\t")
-            col_idx = []
-            for cn in col_names:
-                try:
-                    col_idx.append(header.index(cn))
-                except ValueError:
-                    col_idx.append(-1)
+        sheet_num = 0
+        sheet_file = None
+        row_in_sheet = 0
+        global_row = 0
 
-            row_num = 2
-            for line in tf:
-                fields = line.rstrip("\n").split("\t")
-                row_data = [fields[i] if 0 <= i < len(fields) else "" for i in col_idx]
-                sf.write(_row_xml(row_num, row_data))
-                row_num += 1
-                # 每 10000 行让出 CPU 1ms
-                if row_num % 10000 == 0:
-                    time.sleep(0.001)
+        def _start_sheet():
+            nonlocal sheet_num, sheet_file, row_in_sheet
+            sheet_num += 1
+            sname = "Data" if sheet_num == 1 else f"Data_{sheet_num}"
+            sheet_names.append(sname)
+            sf = tempfile.mktemp(suffix=".xml")
+            sheet_file = open(sf, "w", encoding="utf-8")
+            sheet_file.write('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+            sheet_file.write('<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
+            # 每个 sheet 都写表头
+            sheet_file.write(_row_xml(1, col_labels))
+            row_in_sheet = 1  # header counted
+            sheet_files.append(sf)
 
-        sf.write("</sheetData></worksheet>")
+        def _close_sheet():
+            nonlocal sheet_file
+            if sheet_file:
+                sheet_file.write("</sheetData></worksheet>")
+                sheet_file.close()
+                sheet_file = None
 
-    # 打包 xlsx (ZIP)
+        _start_sheet()
+
+        for line in tf:
+            fields = line.rstrip("\n").split("\t")
+            row_data = [fields[i] if 0 <= i < len(fields) else "" for i in col_idx]
+            row_in_sheet += 1
+            sheet_file.write(_row_xml(row_in_sheet, row_data))
+            global_row += 1
+            if global_row % 10000 == 0:
+                time.sleep(0.001)
+            # 超过单 sheet 上限，新建 sheet
+            if row_in_sheet >= MAX_ROWS_PER_SHEET:
+                _close_sheet()
+                _start_sheet()
+
+        _close_sheet()
+
+    # 生成动态 XML
+    num_sheets = len(sheet_files)
+    ct_parts = [
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">',
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>',
+        '<Default Extension="xml" ContentType="application/xml"/>',
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+    ]
+    wb_sheets = []
+    wb_rels = []
+    for i in range(num_sheets):
+        sname = sheet_names[i]
+        ct_parts.append(f'<Override PartName="/xl/worksheets/sheet{i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>')
+        wb_sheets.append(f'<sheet name="{sname}" sheetId="{i+1}" r:id="rId{i+1}"/>')
+        wb_rels.append(f'<Relationship Id="rId{i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i+1}.xml"/>')
+    ct_parts.append("</Types>")
+
+    ct_xml = "".join(ct_parts)
+    wb_xml = f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{"".join(wb_sheets)}</sheets></workbook>'
+    wb_rels_xml = f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{"".join(wb_rels)}</Relationships>'
+    rels_xml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'
+
+    # 打包 xlsx
     with zipfile.ZipFile(xlsx_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("[Content_Types].xml", _CT)
-        zf.writestr("_rels/.rels", _RELS)
-        zf.writestr("xl/workbook.xml", _WB)
-        zf.writestr("xl/_rels/workbook.xml.rels", _WB_RELS)
-        zf.write(sheet_tmp, "xl/worksheets/sheet1.xml")
+        zf.writestr("[Content_Types].xml", ct_xml)
+        zf.writestr("_rels/.rels", rels_xml)
+        zf.writestr("xl/workbook.xml", wb_xml)
+        zf.writestr("xl/_rels/workbook.xml.rels", wb_rels_xml)
+        for i, sf in enumerate(sheet_files):
+            zf.write(sf, f"xl/worksheets/sheet{i+1}.xml")
+            os.unlink(sf)
 
-    os.unlink(sheet_tmp)
+    print(f"Done: {global_row} rows in {num_sheets} sheet(s)")
 
 
 if __name__ == "__main__":

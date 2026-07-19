@@ -56,20 +56,34 @@ def main():
 
     wb = openpyxl.Workbook(write_only=True)
 
+    MAX_PER_SHEET = 1000000
+
     for sheet_spec in spec.get("sheets", []):
-        ws = wb.create_sheet(sheet_spec.get("name", "Sheet"))
+        base_name = sheet_spec.get("name", "Sheet")
         cols = sheet_spec["columns"]
         col_names = [c["name"] for c in cols]
+        labels = [c["label"] for c in cols]
 
-        # 表头
-        ws.append([c["label"] for c in cols])
+        sheet_idx = 0
+        row_in_sheet = 0
+        ws = None
 
-        # 数据行
-        row_num = 0
+        def _new_ws():
+            nonlocal ws, sheet_idx, row_in_sheet
+            sheet_idx += 1
+            sname = base_name if sheet_idx == 1 else f"{base_name}_{sheet_idx}"
+            ws = wb.create_sheet(sname)
+            ws.append(labels)
+            row_in_sheet = 1
+
+        _new_ws()
+
         for row in sheet_spec.get("rows", []):
+            if row_in_sheet >= MAX_PER_SHEET:
+                _new_ws()
             ws.append([_convert(row.get(cn)) for cn in col_names])
-            row_num += 1
-            if row_num % 10000 == 0:
+            row_in_sheet += 1
+            if row_in_sheet % 10000 == 0:
                 time.sleep(0.001)
 
         # 合计行(可选)

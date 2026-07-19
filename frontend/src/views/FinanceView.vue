@@ -1275,7 +1275,24 @@ async function exportViaFetch(url, fileName) {
     throw new Error(err.detail || '导出失败')
   }
   const blob = await resp.blob()
-  // 始终用浏览器下载(避免异步后 user activation 过期)
+  // 尝试用 showSaveFilePicker 保存到指定位置(需用户激活)
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: 'Excel文件', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }],
+      })
+      const writable = await handle.createWritable()
+      await writable.write(blob)
+      await writable.close()
+      ElMessage.success(`已保存到 ${handle.name}`)
+      _logExport('财务报表', fileName)
+      return
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return
+      // 失败回退
+    }
+  }
   downloadBlob(blob, fileName)
   ElMessage.success('导出完成')
   _logExport('财务报表', fileName)

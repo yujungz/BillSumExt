@@ -541,18 +541,21 @@ async function doExport(format = 'xlsx') {
 
       let dirSaved = false
       if (dirHandle) {
-        try {
-          await dirHandle.requestPermission({ mode: 'readwrite' })
-          const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
-          const w1 = await fh1.createWritable()
-          await w1.write(sumBlob)
-          await w1.close()
-          if (showLogDetail.value) {
-            await _exportDetail(dirHandle, fnDetail, body)
+        // 检查权限(不需要用户激活), 已授权则直接写
+        const perm = dirHandle.queryPermission ? await dirHandle.queryPermission({ mode: 'readwrite' }) : 'granted'
+        if (perm === 'granted') {
+          try {
+            const fh1 = await dirHandle.getFileHandle(fnSum, { create: true })
+            const w1 = await fh1.createWritable()
+            await w1.write(sumBlob)
+            await w1.close()
+            if (showLogDetail.value) {
+              await _exportDetail(dirHandle, fnDetail, body)
+            }
+            dirSaved = true
+          } catch (writeErr) {
+            // 写入失败, 回退
           }
-          dirSaved = true
-        } catch (dirErr) {
-          // 异步轮询后用户激活已过期，回退到浏览器下载
         }
       }
       if (!dirSaved) {

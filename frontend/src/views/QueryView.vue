@@ -484,15 +484,15 @@ async function exportConfirm(format) {
     const { data: blob } = await api.query.exportDownload(td.task_id)
     let fileSaved = false
     if (saveHandle) {
-      try {
-        await saveHandle.requestPermission({ mode: 'readwrite' })
-        const writable = await saveHandle.createWritable()
-        await writable.write(blob)
-        await writable.close()
-        ElMessage.success(`已保存到 ${saveHandle.name}`)
-        fileSaved = true
-      } catch (permErr) {
-        // 异步轮询后用户激活已过期，回退到浏览器下载
+      const perm = saveHandle.queryPermission ? await saveHandle.queryPermission({ mode: 'readwrite' }) : 'granted'
+      if (perm === 'granted') {
+        try {
+          const writable = await saveHandle.createWritable()
+          await writable.write(blob)
+          await writable.close()
+          ElMessage.success(`已保存到 ${saveHandle.name}`)
+          fileSaved = true
+        } catch (writeErr) { /* 回退 */ }
       }
     }
     if (!fileSaved) {
