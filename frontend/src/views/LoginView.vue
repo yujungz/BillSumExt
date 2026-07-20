@@ -2,7 +2,7 @@
   <div class="login-page">
     <div class="login-card">
       <div class="login-header">
-        <div class="login-logo">BillSum</div>
+        <div class="login-logo">BillSumExt</div>
         <div class="login-subtitle">多站点帐单统计系统</div>
       </div>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="0" @keyup.enter="doLogin">
