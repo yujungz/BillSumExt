@@ -27,6 +27,7 @@ services:
       context: .
       dockerfile: deploy.Dockerfile
     container_name: BillSumExt-app
+    shm_size: 2g
     ports:
       - "8090:443"
       - "8091:80"

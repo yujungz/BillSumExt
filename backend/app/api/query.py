@@ -261,29 +261,134 @@ async def export_table_async(
                 t["media"] = "text/csv; charset=utf-8"
                 t["fn"] = f"{fn}.csv"
             else:
-                # xlsx: TSV 子进程 dump → 独立 Python 子进程转换(两步都不占 uvicorn GIL)
-                where = _build_where_sql(f)
-                tsv_path = tempfile.NamedTemporaryFile(suffix=".tsv", delete=False).name
-                await loop.run_in_executor(None, _export_csv_subprocess, mc, db_name, table, tsv_path, where)
-
-                # 获取列映射(轻量 information_schema 查询)
+                # xlsx: 全管道 mysql | awk | zip(零临时文件, 最低磁盘 I/O)
                 columns = await query_service.get_table_columns(site, table)
                 cols = _apply_fields(columns, fields)
-                cols_json = json.dumps([{"name": c["name"], "label": c["label"]} for c in cols])
 
-                # 独立子进程 TSV → xlsx
+                # 构建 SELECT 带中文别名(mysql 直接输出列名作为 TSV header)
+                col_select = ", ".join(f"`{c['name']}`" for c in cols)
+                where = _build_where_sql(f)
+                select_sql = f"SELECT {col_select} FROM `{table}`{where}"
+
                 tmp_path = tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False).name
-                proc = await loop.run_in_executor(None, _run_xlsx_worker, tsv_path, tmp_path, cols_json)
-                try:
-                    os.unlink(tsv_path)
-                except OSError:
-                    pass
-                if proc.returncode != 0:
-                    stderr_msg = proc.stderr.decode('utf-8', errors='replace')[:500] if proc.stderr else '(no stderr)'
-                    raise RuntimeError(f"xlsx worker failed (exit={proc.returncode}): {stderr_msg}")
-                # 验证文件非空
+
+                def _run_pipeline():
+                    """mysql | awk | zip 管道, 零临时文件。"""
+                    import zipfile as _zf
+                    awk_script = os.path.join(
+                        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "services", "tsv_to_xlsx.awk"
+                    )
+                    mysql_cmd = [
+                        "mysql",
+                        f"--host={mc.host}", f"--port={mc.port}",
+                        f"--user={mc.user}", f"--password={mc.password}",
+                        "--skip-ssl", "--batch",
+                        "-e", select_sql,
+                        db_name,
+                    ]
+                    awk_cmd = [
+                        "awk", "-f", awk_script,
+                        "-v", "MAX_ROWS=1000000",
+                        "-v", "SHEET_PREFIX=Data",
+                    ]
+
+                    mysql_proc = subprocess.Popen(mysql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    awk_proc = subprocess.Popen(awk_cmd, stdin=mysql_proc.stdout,
+                                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                    mysql_proc.stdout.close()  # 让 mysql 能收 SIGPIPE
+
+                    sheet_count = 0
+                    sheet_names = []
+                    global_rows = 0
+                    tmp_dir = "/dev/shm" if os.path.isdir("/dev/shm") else None
+
+                    try:
+                        with _zf.ZipFile(tmp_path, "w", _zf.ZIP_DEFLATED) as zf:
+                            current_f = None
+                            current_tmp = None
+
+                            for raw in awk_proc.stdout:
+                                line = raw.rstrip(b"\n")
+
+                                if line.startswith(b"SHEET_START:"):
+                                    sheet_count += 1
+                                    sname = line[len(b"SHEET_START:"):].decode("utf-8", "replace")
+                                    sheet_names.append(sname)
+                                    current_tmp = tempfile.mktemp(suffix=".xml", dir=tmp_dir)
+                                    current_f = open(current_tmp, "wb")
+                                    current_f.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+                                    current_f.write(b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
+
+                                elif line.startswith(b"SHEET_END"):
+                                    if current_f:
+                                        current_f.write(b'</sheetData></worksheet>')
+                                        current_f.close()
+                                        current_f = None
+                                        zf.write(current_tmp, f"xl/worksheets/sheet{sheet_count}.xml")
+                                        os.unlink(current_tmp)
+                                        current_tmp = None
+
+                                elif line.startswith(b"DONE:"):
+                                    try:
+                                        global_rows = int(line[len(b"DONE:"):])
+                                    except ValueError:
+                                        pass
+
+                                elif current_f:
+                                    current_f.write(raw)
+
+                            # 写固定 XML
+                            ct = [
+                                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                                '<Default Extension="xml" ContentType="application/xml"/>'
+                                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>',
+                            ]
+                            wbs = []
+                            wbrs = []
+                            for i in range(sheet_count):
+                                sn = sheet_names[i]
+                                ct.append(f'<Override PartName="/xl/worksheets/sheet{i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>')
+                                wbs.append(f'<sheet name="{sn}" sheetId="{i+1}" r:id="rId{i+1}"/>')
+                                wbrs.append(f'<Relationship Id="rId{i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i+1}.xml"/>')
+                            ct.append("</Types>")
+
+                            zf.writestr("[Content_Types].xml", "".join(ct))
+                            zf.writestr("_rels/.rels",
+                                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+                                '</Relationships>')
+                            zf.writestr("xl/workbook.xml",
+                                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                                f'<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                                f'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                                f'<sheets>{"".join(wbs)}</sheets></workbook>')
+                            zf.writestr("xl/_rels/workbook.xml.rels",
+                                f'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                                f'<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                                f'{"".join(wbrs)}</Relationships>')
+
+                    finally:
+                        if current_f:
+                            current_f.close()
+                        if current_tmp and os.path.exists(current_tmp):
+                            os.unlink(current_tmp)
+                        awk_proc.wait()
+                        mysql_proc.wait()
+                        if mysql_proc.returncode != 0:
+                            err = mysql_proc.stderr.read().decode("utf-8", "replace")[:300]
+                            raise RuntimeError(f"mysql failed: {err}")
+                        if awk_proc.returncode != 0:
+                            err = awk_proc.stderr.read().decode("utf-8", "replace")[:300]
+                            raise RuntimeError(f"awk failed: {err}")
+
+                await loop.run_in_executor(None, _run_pipeline)
+
                 if not os.path.exists(tmp_path) or os.path.getsize(tmp_path) == 0:
-                    raise RuntimeError("xlsx worker 生成文件为空(0 字节)")
+                    raise RuntimeError("xlsx 生成文件为空(0 字节)")
                 t["media"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 t["fn"] = f"{fn}.xlsx"
 
