@@ -621,7 +621,7 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
                 "mysql",
                 f"--host={mc.host}", f"--port={mc.port}",
                 f"--user={mc.user}", f"--password={mc.password}",
-                "--skip-ssl", "--batch",
+                "--skip-ssl", "--batch", "--quick",
                 "-e", detail_sql,
                 db_name,
             ]

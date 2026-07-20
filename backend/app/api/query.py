@@ -153,7 +153,7 @@ def _export_csv_subprocess(mc, db_name, table, tmp_path, where=""):
         "mysql",
         f"--host={mc.host}", f"--port={mc.port}",
         f"--user={mc.user}", f"--password={mc.password}",
-        "--skip-ssl", "--batch",
+        "--skip-ssl", "--batch", "--quick",
         "-e", query,
         db_name,
     ]
@@ -283,7 +283,7 @@ async def export_table_async(
                         "mysql",
                         f"--host={mc.host}", f"--port={mc.port}",
                         f"--user={mc.user}", f"--password={mc.password}",
-                        "--skip-ssl", "--batch",
+                        "--skip-ssl", "--batch", "--quick",
                         "-e", select_sql,
                         db_name,
                     ]

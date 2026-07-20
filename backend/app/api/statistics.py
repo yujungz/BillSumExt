@@ -43,7 +43,7 @@ def _dump_detail_tsv(mc, db_name, sql, tsv_path):
         "mysql",
         f"--host={mc.host}", f"--port={mc.port}",
         f"--user={mc.user}", f"--password={mc.password}",
-        "--skip-ssl", "--batch",
+        "--skip-ssl", "--batch", "--quick",
         "-e", sql,
         db_name,
     ]
