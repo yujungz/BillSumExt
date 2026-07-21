@@ -7,17 +7,20 @@ import subprocess
 
 GENERIC_WORKER = os.path.join(os.path.dirname(__file__), "generic_xlsx_worker.py")
 
+# 临时文件优先用 /dev/shm(内存磁盘, 零磁盘 I/O)
+_TMP_DIR = "/dev/shm" if os.path.isdir("/dev/shm") else None
+
 
 async def generate_xlsx_subprocess(loop, spec):
     """通过 generic_xlsx_worker 子进程生成 xlsx, 返回临时文件路径。
     spec 格式见 generic_xlsx_worker.py 文档。
     子进程独立 Python 解释器, 不占 uvicorn GIL。"""
-    # 写 spec 到临时 JSON
-    spec_fd, spec_path = tempfile.mkstemp(suffix=".json")
+    # 写 spec 到临时 JSON(/dev/shm)
+    spec_fd, spec_path = tempfile.mkstemp(suffix=".json", dir=_TMP_DIR)
     with os.fdopen(spec_fd, "w", encoding="utf-8") as f:
         json.dump(spec, f, ensure_ascii=False, default=str)
 
-    xlsx_path = tempfile.mktemp(suffix=".xlsx")
+    xlsx_path = tempfile.mktemp(suffix=".xlsx", dir=_TMP_DIR)
 
     def _run_worker():
         return subprocess.run(

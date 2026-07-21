@@ -669,7 +669,7 @@ async def export_stats_async(req: StatsRequest):
                 detail_cols = _build_detail_columns(req.show_channel_name, req.fields)
                 where = _detail_where_sql(req.filters)
                 detail_sql = _build_detail_sql(req.table_name, detail_cols, req.show_channel_name, where)
-                tsv_path = tempfile.mktemp(suffix=".tsv")
+                tsv_path = tempfile.mktemp(suffix=".tsv", dir="/dev/shm" if os.path.isdir("/dev/shm") else None)
                 tmp_files.append(tsv_path)
                 await loop.run_in_executor(None, _dump_detail_tsv, mc, db_name, detail_sql, tsv_path)
 

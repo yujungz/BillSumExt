@@ -615,7 +615,7 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
             detail_cols_json = _json.dumps([{"name": c, "label": c} for c in detail_cols_filtered])
 
             # 4c. mysql TSV dump (subprocess, no Python GIL)
-            tsv_path = tempfile.mktemp(suffix=".tsv")
+            tsv_path = tempfile.mktemp(suffix=".tsv", dir="/dev/shm" if os.path.isdir("/dev/shm") else None)
             tmp_files.append(tsv_path)
             mysql_cmd = [
                 "mysql",

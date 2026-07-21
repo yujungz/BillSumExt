@@ -27,6 +27,9 @@ except OSError:
 MAX_ROWS_PER_SHEET = 1000000
 AWK_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tsv_to_xlsx.awk")
 
+# 临时文件优先用 /dev/shm(内存磁盘, 零磁盘 I/O)
+_TMP_DIR = "/dev/shm" if os.path.isdir("/dev/shm") else None
+
 _XML_HEAD = b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
 _WS_OPEN = b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>'
 _WS_CLOSE = b'</sheetData></worksheet>'
@@ -96,7 +99,7 @@ def main():
                     col_names = [c["name"] for c in cols]
                     col_labels = [c["label"] for c in cols]
 
-                    tmp = tempfile.mktemp(suffix=".xml")
+                    tmp = tempfile.mktemp(suffix=".xml", dir=_TMP_DIR)
                     temp_xmls.append(tmp)
                     with open(tmp, "wb") as wf:
                         wf.write(_XML_HEAD + _WS_OPEN)
@@ -134,7 +137,7 @@ def main():
                     sheet_count += 1
                     sname = line[len(b"SHEET_START:"):].decode("utf-8")
                     sheet_names.append(sname)
-                    current_temp = tempfile.mktemp(suffix=".xml")
+                    current_temp = tempfile.mktemp(suffix=".xml", dir=_TMP_DIR)
                     temp_xmls.append(current_temp)
                     current_f = open(current_temp, "wb")
                     current_f.write(_XML_HEAD)
