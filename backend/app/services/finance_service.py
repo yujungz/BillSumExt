@@ -536,14 +536,8 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
 
     try:
         if detail_total > 0 and with_detail:
-            # ── 合并导出: summary sheets + detail sheets via subprocess ──
+            # ── 合并导出: summary sheets + detail sheets (全管道, 无 TSV 文件) ──
             task["progress"] = f"导出明细 0/{detail_total}"
-
-            # 4a. Write summary spec to temp JSON
-            spec_path = tempfile.mktemp(suffix=".json")
-            tmp_files.append(spec_path)
-            with open(spec_path, "w", encoding="utf-8") as f:
-                _json.dump({"sheets": summary_sheets}, f, ensure_ascii=False, default=str)
 
             # 4b. Build detail SQL for mysql subprocess
             detail_sql = f"""
@@ -612,35 +606,123 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
                     "创建缓存1H-token","创建缓存1H单价","创建缓存1H费用","创建缓存token","创建缓存费用",
                     "缓存总token","缓存总费用","总消耗token","消费额度","平台额度"]
 
-            detail_cols_json = _json.dumps([{"name": c, "label": c} for c in detail_cols_filtered])
+            # detail SQL 已有中文别名(AS `序号` 等), awk 直接用 TSV header
+            # 全管道 mysql | awk | python zip — 无 TSV 文件
+            AWK_SCRIPT = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "tsv_to_xlsx.awk")
+            _shm = "/dev/shm" if _os.path.isdir("/dev/shm") else None
 
-            # 4c. mysql TSV dump (subprocess, no Python GIL)
-            tsv_path = tempfile.mktemp(suffix=".tsv", dir="/dev/shm" if os.path.isdir("/dev/shm") else None)
-            tmp_files.append(tsv_path)
-            mysql_cmd = [
-                "mysql",
-                f"--host={mc.host}", f"--port={mc.port}",
-                f"--user={mc.user}", f"--password={mc.password}",
-                "--skip-ssl", "--batch", "--quick",
-                "-e", detail_sql,
-                db_name,
-            ]
-            def _dump_tsv():
-                with open(tsv_path, "wb") as fout:
-                    proc = _sp.run(mysql_cmd, stdout=fout, stderr=_sp.PIPE, timeout=3600)
-                return proc
-            await loop.run_in_executor(None, _dump_tsv)
+            def _run_pipeline():
+                """mysql --quick | awk | python zip — 零 TSV 文件。"""
+                import zipfile as _zf
+                mysql_cmd = [
+                    "mysql",
+                    f"--host={mc.host}", f"--port={mc.port}",
+                    f"--user={mc.user}", f"--password={mc.password}",
+                    "--skip-ssl", "--batch", "--quick",
+                    "-e", detail_sql,
+                    db_name,
+                ]
+                awk_cmd = ["awk", "-f", AWK_SCRIPT,
+                           "-v", "MAX_ROWS=1000000",
+                           "-v", "SHEET_PREFIX=用户明细"]
 
-            # 4d. Call export_xlsx_worker.py (subprocess, no GIL)
-            worker = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))), "services", "export_xlsx_worker.py")
-            def _run_worker():
-                return _sp.run(
-                    [_sys.executable, worker, tsv_path, file_path, detail_cols_json, spec_path],
-                    capture_output=True, timeout=3600,
-                )
-            proc = await loop.run_in_executor(None, _run_worker)
-            if proc.returncode != 0:
-                raise RuntimeError(f"xlsx worker failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
+                mysql_proc = _sp.Popen(mysql_cmd, stdout=_sp.PIPE, stderr=_sp.PIPE)
+                awk_proc = _sp.Popen(awk_cmd, stdin=mysql_proc.stdout,
+                                     stdout=_sp.PIPE, stderr=_sp.PIPE)
+                mysql_proc.stdout.close()
+
+                sheet_count = 0
+                sheet_names = []
+                current_f = None
+                current_tmp = None
+
+                try:
+                    with _zf.ZipFile(file_path, "w", _zf.ZIP_DEFLATED) as zf:
+                        # Phase 1: 统计 sheets(从内存 spec, 小数据)
+                        for sspec in summary_sheets:
+                            sheet_count += 1
+                            sname = sspec.get("name", f"Sheet{sheet_count}")
+                            sheet_names.append(sname)
+                            cols = sspec["columns"]
+                            col_names = [c["name"] for c in cols]
+                            col_labels = [c["label"] for c in cols]
+
+                            tmp = tempfile.mktemp(suffix=".xml", dir=_shm)
+                            with open(tmp, "wb") as wf:
+                                wf.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+                                wf.write(b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
+                                wf.write(b'<row r="1">' + b"".join(
+                                    b'<c t="inlineStr"><is><t>' + str(l).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").encode() + b'</t></is></c>'
+                                    for l in col_labels) + b'</row>')
+                                rn = 1
+                                for row in sspec.get("rows", []):
+                                    rn += 1
+                                    cells = b""
+                                    for cn in col_names:
+                                        v = row.get(cn)
+                                        if v is None or v == "":
+                                            cells += b'<c/>'
+                                        elif isinstance(v, (int, float)):
+                                            cells += b'<c><v>' + str(v).encode() + b'</v></c>'
+                                        else:
+                                            s = str(v).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+                                            cells += b'<c t="inlineStr"><is><t>' + s.encode() + b'</t></is></c>'
+                                    wf.write(f'<row r="{rn}">'.encode() + cells + b'</row>')
+                                wf.write(b'</sheetData></worksheet>')
+                            zf.write(tmp, f"xl/worksheets/sheet{sheet_count}.xml")
+                            _os.unlink(tmp)
+
+                        # Phase 2: 明细 sheets(从 awk 管道)
+                        for raw in awk_proc.stdout:
+                            line = raw.rstrip(b"\n")
+                            if line.startswith(b"SHEET_START:"):
+                                sheet_count += 1
+                                sname = line[len(b"SHEET_START:"):].decode("utf-8","replace")
+                                sheet_names.append(sname)
+                                current_tmp = tempfile.mktemp(suffix=".xml", dir=_shm)
+                                current_f = open(current_tmp, "wb")
+                                current_f.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
+                                current_f.write(b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
+                            elif line.startswith(b"SHEET_END"):
+                                if current_f:
+                                    current_f.write(b'</sheetData></worksheet>')
+                                    current_f.close()
+                                    current_f = None
+                                    zf.write(current_tmp, f"xl/worksheets/sheet{sheet_count}.xml")
+                                    _os.unlink(current_tmp)
+                                    current_tmp = None
+                            elif line.startswith(b"DONE:"):
+                                pass
+                            elif current_f:
+                                current_f.write(raw)
+
+                        # Phase 3: ZIP 元数据
+                        ct = ['<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>']
+                        wbs = []
+                        wbrs = []
+                        for i in range(sheet_count):
+                            sn = sheet_names[i]
+                            ct.append(f'<Override PartName="/xl/worksheets/sheet{i+1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>')
+                            wbs.append(f'<sheet name="{sn}" sheetId="{i+1}" r:id="rId{i+1}"/>')
+                            wbrs.append(f'<Relationship Id="rId{i+1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i+1}.xml"/>')
+                        ct.append("</Types>")
+                        zf.writestr("[Content_Types].xml", "".join(ct))
+                        zf.writestr("_rels/.rels", '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+                        zf.writestr("xl/workbook.xml", f'<?xml version="1.0"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>{"".join(wbs)}</sheets></workbook>')
+                        zf.writestr("xl/_rels/workbook.xml.rels", f'<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{"".join(wbrs)}</Relationships>')
+
+                finally:
+                    if current_f:
+                        current_f.close()
+                    if current_tmp and _os.path.exists(current_tmp):
+                        _os.unlink(current_tmp)
+                    awk_proc.wait()
+                    mysql_proc.wait()
+                    if mysql_proc.returncode != 0:
+                        raise RuntimeError(f"mysql detail failed: {mysql_proc.stderr.read().decode('utf-8','replace')[:300]}")
+
+            task["progress"] = "导出明细: 正在生成..."
+            await loop.run_in_executor(None, _run_pipeline)
 
         else:
             # ── 仅汇总(无明细): 用 generic_xlsx_worker ──
