@@ -659,25 +659,35 @@ async def export_stats_async(req: StatsRequest):
 
             if req.show_log_detail:
                 # ── 合并导出: 统计 sheet + 明细 sheets ──
-                # 1. 写 summary spec JSON
-                spec_path = tempfile.mktemp(suffix=".json")
+                _shm = "/dev/shm" if os.path.isdir("/dev/shm") else None
+
+                # 1. 写 summary spec JSON(/dev/shm)
+                spec_path = tempfile.mktemp(suffix=".json", dir=_shm)
                 tmp_files.append(spec_path)
                 with open(spec_path, "w", encoding="utf-8") as f:
                     json.dump(summary_spec, f, ensure_ascii=False, default=str)
 
-                # 2. detail SQL + mysql TSV dump
+                # 2. detail SQL + mysql TSV dump(/dev/shm)
                 detail_cols = _build_detail_columns(req.show_channel_name, req.fields)
                 where = _detail_where_sql(req.filters)
                 detail_sql = _build_detail_sql(req.table_name, detail_cols, req.show_channel_name, where)
-                tsv_path = tempfile.mktemp(suffix=".tsv", dir="/dev/shm" if os.path.isdir("/dev/shm") else None)
+                tsv_path = tempfile.mktemp(suffix=".tsv", dir=_shm)
                 tmp_files.append(tsv_path)
+                task["progress"] = "导出明细: 正在查询数据库..."
                 await loop.run_in_executor(None, _dump_detail_tsv, mc, db_name, detail_sql, tsv_path)
+
+                # 验证 TSV 非空
+                tsv_size = os.path.getsize(tsv_path)
+                if tsv_size == 0:
+                    raise RuntimeError("明细数据查询为空(TSV 0 字节)")
+                log.info(f"[stats-export] TSV size: {tsv_size}")
 
                 # 3. detail columns JSON (name=label, 因为 mysql --batch 用 SQL 别名做表头)
                 detail_cols_json = json.dumps([{"name": c["label"], "label": c["label"]} for c in detail_cols])
 
                 # 4. 调 worker (4 参数: tsv, xlsx, detail_cols_json, spec_path)
-                xlsx_path = tempfile.mktemp(suffix=".xlsx")
+                xlsx_path = tempfile.mktemp(suffix=".xlsx", dir=_shm)
+                task["progress"] = "导出明细: 生成 Excel..."
                 def _run_combined():
                     return subprocess.run(
                         [sys.executable, _XLSX_WORKER, tsv_path, xlsx_path, detail_cols_json, spec_path],
@@ -685,7 +695,10 @@ async def export_stats_async(req: StatsRequest):
                     )
                 proc = await loop.run_in_executor(None, _run_combined)
                 if proc.returncode != 0:
-                    raise RuntimeError(f"xlsx worker failed: {proc.stderr.decode('utf-8', errors='replace')[:300]}")
+                    stderr = proc.stderr.decode('utf-8', errors='replace')[:500] if proc.stderr else '(no stderr)'
+                    raise RuntimeError(f"xlsx worker failed (exit={proc.returncode}): {stderr}")
+                if not os.path.exists(xlsx_path) or os.path.getsize(xlsx_path) == 0:
+                    raise RuntimeError("xlsx 生成文件为空(0 字节)")
                 t["file_path"] = xlsx_path
             else:
                 # ── 仅统计 ──

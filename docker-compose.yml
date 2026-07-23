@@ -10,6 +10,7 @@ services:
       --max-heap-table-size=1G
       --sort-buffer-size=16M
       --innodb-buffer-pool-size=1G
+      --innodb-redo-log-capacity=2G
     environment:
       MYSQL_ROOT_PASSWORD: Bill1@3
       MYSQL_CHARACTER_SET_SERVER: utf8mb4
