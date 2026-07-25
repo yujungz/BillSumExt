@@ -617,6 +617,22 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
             with open(spec_path, "w", encoding="utf-8") as f:
                 _json.dump({"sheets": summary_sheets}, f, ensure_ascii=False, default=str)
 
+            # 构建 mysql -e 用的 WHERE(值内联, 不用 %s 占位符)
+            inline_where = "l.windup_type < 2"
+            if username:
+                safe_user = username.replace("\\", "\\\\").replace("'", "\\'")
+                inline_where += f" AND l.username='{safe_user}'"
+            if date_start:
+                inline_where += f" AND l.created_at>=UNIX_TIMESTAMP('{date_start} 00:00:00')-28800"
+            if date_end:
+                inline_where += f" AND l.created_at<=UNIX_TIMESTAMP('{date_end} 23:59:59')-28800"
+
+            # 重建 detail SQL 用内联 WHERE
+            detail_sql_inline = detail_sql.replace(
+                f"WHERE l.windup_type < 2{uw}{dw}",
+                f"WHERE {inline_where}"
+            )
+
             # mysql TSV dump → /tmp 磁盘
             tsv_path = tempfile.mktemp(suffix=".tsv")
             tmp_files.append(tsv_path)
@@ -625,7 +641,7 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
                 f"--host={mc.host}", f"--port={mc.port}",
                 f"--user={mc.user}", f"--password={mc.password}",
                 "--skip-ssl", "--batch", "--quick",
-                "-e", detail_sql,
+                "-e", detail_sql_inline,
                 db_name,
             ]
             task["progress"] = "导出明细: 正在查询数据库..."
@@ -633,7 +649,10 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
                 with open(tsv_path, "wb") as fout:
                     proc = _sp.run(mysql_cmd, stdout=fout, stderr=_sp.PIPE, timeout=3600)
                 return proc
-            await loop.run_in_executor(None, _dump_tsv)
+            proc = await loop.run_in_executor(None, _dump_tsv)
+            if proc.returncode != 0:
+                err = proc.stderr.decode('utf-8', errors='replace')[:500] if proc.stderr else '(no stderr)'
+                raise RuntimeError(f"mysql TSV dump failed (exit={proc.returncode}): {err}")
 
             tsv_size = _os.path.getsize(tsv_path)
             if tsv_size == 0:
