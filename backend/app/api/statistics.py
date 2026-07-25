@@ -469,7 +469,8 @@ async def query_stats_status(task_id: str = Query(...)):
     if not t:
         raise HTTPException(404, detail="任务不存在或已过期")
     elapsed = (t["end"] or time.time()) - t["start"]
-    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"],
+            "progress": t.get("progress", "")}
 
 
 @router.get("/query-result")
@@ -790,7 +791,8 @@ async def export_stats_status(task_id: str = Query(...)):
     if not t:
         raise HTTPException(404, detail="任务不存在或已过期")
     elapsed = (t["end"] or time.time()) - t["start"]
-    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"]}
+    return {"status": t["status"], "elapsed": round(elapsed, 1), "error": t["error"],
+            "progress": t.get("progress", "")}
 
 
 @router.get("/export-download")
