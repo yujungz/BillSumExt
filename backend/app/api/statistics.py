@@ -721,7 +721,7 @@ async def export_stats_async(req: StatsRequest):
             if req.show_log_detail:
                 # ── 合并导出: 统计 sheet + 明细 sheets (全管道, 无 TSV 文件) ──
                 _shm = "/dev/shm" if os.path.isdir("/dev/shm") else None
-                xlsx_path = tempfile.mktemp(suffix=".xlsx", dir=_shm)
+                xlsx_path = tempfile.mktemp(suffix=".xlsx")
 
                 # 构建 detail SQL(带中文别名, mysql --batch 输出即中文表头)
                 detail_cols = _build_detail_columns(req.show_channel_name, req.fields)
