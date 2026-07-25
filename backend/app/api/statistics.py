@@ -735,7 +735,7 @@ async def export_stats_async(req: StatsRequest):
                 detail_sql = _build_detail_sql(req.table_name, detail_cols, req.show_channel_name, where)
                 tsv_path = tempfile.mktemp(suffix=".tsv")  # /tmp 磁盘
                 tmp_files.append(tsv_path)
-                task["progress"] = "导出明细: 正在查询数据库..."
+                t["progress"] = "导出明细: 正在查询数据库..."
                 await loop.run_in_executor(None, _dump_detail_tsv, mc, db_name, detail_sql, tsv_path)
 
                 tsv_size = os.path.getsize(tsv_path)
@@ -748,7 +748,7 @@ async def export_stats_async(req: StatsRequest):
 
                 # 4. export_xlsx_worker 子进程(TSV→xlsx, 内部用 awk)
                 xlsx_path = tempfile.mktemp(suffix=".xlsx")  # /tmp 磁盘
-                task["progress"] = "导出明细: 生成 Excel..."
+                t["progress"] = "导出明细: 生成 Excel..."
                 def _run_worker():
                     return subprocess.run(
                         [sys.executable, _XLSX_WORKER, tsv_path, xlsx_path, detail_cols_json, spec_path],
