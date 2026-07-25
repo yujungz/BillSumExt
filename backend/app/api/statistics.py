@@ -719,123 +719,48 @@ async def export_stats_async(req: StatsRequest):
             db_name = config.db_name(req.site)
 
             if req.show_log_detail:
-                # ── 合并导出: 统计 sheet + 明细 sheets (全管道, 无 TSV 文件) ──
+                # ── 合并导出: TSV 写磁盘(/tmp) → export_xlsx_worker 子进程 ──
                 _shm = "/dev/shm" if os.path.isdir("/dev/shm") else None
-                xlsx_path = tempfile.mktemp(suffix=".xlsx")
 
-                # 构建 detail SQL(带中文别名, mysql --batch 输出即中文表头)
+                # 1. 写 summary spec JSON(/dev/shm, 小)
+                spec_path = tempfile.mktemp(suffix=".json", dir=_shm)
+                tmp_files.append(spec_path)
+                with open(spec_path, "w", encoding="utf-8") as f:
+                    json.dump(summary_spec, f, ensure_ascii=False, default=str)
+
+                # 2. detail SQL + mysql TSV dump → /tmp(磁盘, 不撑爆 /dev/shm)
                 detail_cols = _build_detail_columns(req.show_channel_name, req.fields)
                 where = _detail_where_sql(req.filters)
                 detail_sql = _build_detail_sql(req.table_name, detail_cols, req.show_channel_name, where)
+                tsv_path = tempfile.mktemp(suffix=".tsv")  # /tmp 磁盘
+                tmp_files.append(tsv_path)
+                task["progress"] = "导出明细: 正在查询数据库..."
+                await loop.run_in_executor(None, _dump_detail_tsv, mc, db_name, detail_sql, tsv_path)
 
-                AWK_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                          "services", "tsv_to_xlsx.awk")
+                tsv_size = os.path.getsize(tsv_path)
+                if tsv_size == 0:
+                    raise RuntimeError("明细数据查询为空(TSV 0 字节)")
+                log.info(f"[stats-export] TSV: {tsv_size} bytes")
 
-                def _run_pipeline():
-                    """mysql | awk | python zip — 零临时文件(仅 XML 在 /dev/shm)。"""
-                    import zipfile as _zf
-                    mysql_cmd = [
-                        "mysql",
-                        f"--host={mc.host}", f"--port={mc.port}",
-                        f"--user={mc.user}", f"--password={mc.password}",
-                        "--skip-ssl", "--batch", "--quick",
-                        "-e", detail_sql,
-                        db_name,
-                    ]
-                    awk_cmd = ["awk", "-f", AWK_SCRIPT,
-                               "-v", "MAX_ROWS=1000000",
-                               "-v", "SHEET_PREFIX=明细"]
+                # 3. detail columns JSON
+                detail_cols_json = json.dumps([{"name": c["label"], "label": c["label"]} for c in detail_cols])
 
-                    mysql_proc = subprocess.Popen(mysql_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    awk_proc = subprocess.Popen(awk_cmd, stdin=mysql_proc.stdout,
-                                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                    mysql_proc.stdout.close()
-
-                    sheet_count = 0
-                    sheet_names = []
-                    detail_rows = 0
-                    current_f = None
-                    current_tmp = None
-
-                    try:
-                        with _zf.ZipFile(xlsx_path, "w", _zf.ZIP_DEFLATED) as zf:
-                            # Phase 1: 统计 sheets(从内存 spec, 小数据, 先写入 ZIP)
-                            for sspec in summary_spec.get("sheets", []):
-                                sheet_count += 1
-                                sname = sspec.get("name", f"Sheet{sheet_count}")
-                                sheet_names.append(sname)
-                                cols = sspec["columns"]
-                                col_names = [c["name"] for c in cols]
-                                col_labels = [c["label"] for c in cols]
-
-                                tmp = tempfile.mktemp(suffix=".xml", dir=_shm)
-                                with open(tmp, "wb") as wf:
-                                    wf.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
-                                    wf.write(b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
-                                    wf.write(_build_stats_row_xml(1, col_labels))
-                                    rn = 1
-                                    for row in sspec.get("rows", []):
-                                        rn += 1
-                                        wf.write(_build_stats_row_xml(rn, [row.get(cn) for cn in col_names]))
-                                    wf.write(b'</sheetData></worksheet>')
-                                zf.write(tmp, f"xl/worksheets/sheet{sheet_count}.xml")
-                                os.unlink(tmp)
-
-                            # Phase 2: 明细 sheets(从 awk 管道, 流式写 ZIP)
-                            for raw in awk_proc.stdout:
-                                line = raw.rstrip(b"\n")
-
-                                if line.startswith(b"SHEET_START:"):
-                                    sheet_count += 1
-                                    sname = line[len(b"SHEET_START:"):].decode("utf-8", "replace")
-                                    sheet_names.append(sname)
-                                    current_tmp = tempfile.mktemp(suffix=".xml", dir=_shm)
-                                    current_f = open(current_tmp, "wb")
-                                    current_f.write(b'<?xml version="1.0" encoding="UTF-8" standalone="yes"?>')
-                                    current_f.write(b'<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>')
-
-                                elif line.startswith(b"SHEET_END"):
-                                    if current_f:
-                                        current_f.write(b'</sheetData></worksheet>')
-                                        current_f.close()
-                                        current_f = None
-                                        zf.write(current_tmp, f"xl/worksheets/sheet{sheet_count}.xml")
-                                        os.unlink(current_tmp)
-                                        current_tmp = None
-
-                                elif line.startswith(b"DONE:"):
-                                    try:
-                                        detail_rows = int(line[len(b"DONE:"):])
-                                    except ValueError:
-                                        pass
-
-                                elif current_f:
-                                    current_f.write(raw)
-
-                            # Phase 3: 写固定 XML
-                            _write_zip_metadata(zf, sheet_count, sheet_names)
-
-                    finally:
-                        if current_f:
-                            current_f.close()
-                        if current_tmp and os.path.exists(current_tmp):
-                            os.unlink(current_tmp)
-                        awk_proc.wait()
-                        mysql_proc.wait()
-                        if mysql_proc.returncode != 0:
-                            err = mysql_proc.stderr.read().decode("utf-8", "replace")[:300]
-                            raise RuntimeError(f"mysql failed: {err}")
-                        if awk_proc.returncode != 0:
-                            err = awk_proc.stderr.read().decode("utf-8", "replace")[:300]
-                            raise RuntimeError(f"awk failed: {err}")
-
-                    return detail_rows
-
-                task["progress"] = "导出明细: 正在查询+生成..."
-                detail_count = await loop.run_in_executor(None, _run_pipeline)
-
+                # 4. export_xlsx_worker 子进程(TSV→xlsx, 内部用 awk)
+                xlsx_path = tempfile.mktemp(suffix=".xlsx")  # /tmp 磁盘
+                task["progress"] = "导出明细: 生成 Excel..."
+                def _run_worker():
+                    return subprocess.run(
+                        [sys.executable, _XLSX_WORKER, tsv_path, xlsx_path, detail_cols_json, spec_path],
+                        capture_output=True, timeout=3600,
+                    )
+                proc = await loop.run_in_executor(None, _run_worker)
+                if proc.returncode != 0:
+                    stderr = proc.stderr.decode('utf-8', errors='replace')[:500] if proc.stderr else '(no stderr)'
+                    raise RuntimeError(f"xlsx worker failed (exit={proc.returncode}): {stderr}")
                 if not os.path.exists(xlsx_path) or os.path.getsize(xlsx_path) == 0:
                     raise RuntimeError("xlsx 生成文件为空(0 字节)")
+                xlsx_size = os.path.getsize(xlsx_path)
+                log.info(f"[stats-export] xlsx: {xlsx_size} bytes")
                 t["file_path"] = xlsx_path
             else:
                 # ── 仅统计 ──
