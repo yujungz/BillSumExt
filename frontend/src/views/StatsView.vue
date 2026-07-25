@@ -528,8 +528,10 @@ async function doExport(format = 'xlsx') {
     // 选择完成 → 开始计时并导出
     exportLoading.value = true
     const t0 = Date.now()
+    let _progress = ''
     const _timer = setInterval(() => {
-      exportTimerText.value = `导出中 ${((Date.now() - t0) / 1000).toFixed(1)}s`
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(1)
+      exportTimerText.value = _progress ? `${_progress} (${elapsed}s)` : `导出中 ${elapsed}s`
     }, 100)
     try {
       // 异步导出(后台 run_in_executor, 不阻塞 uvicorn)
@@ -538,6 +540,7 @@ async function doExport(format = 'xlsx') {
       while (true) {
         await new Promise(r => setTimeout(r, 1500))
         const { data: st } = await api.stats.exportStatus(td.task_id)
+        if (st.progress) _progress = st.progress
         if (st.status === 'done') break
         if (st.status === 'failed') throw new Error(st.error || '导出失败')
       }
