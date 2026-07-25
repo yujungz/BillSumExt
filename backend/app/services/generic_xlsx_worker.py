@@ -95,10 +95,15 @@ def main():
             for tf in total_fields:
                 idx = col_names.index(tf) if tf in col_names else -1
                 if idx >= 0:
-                    sm = sum(
-                        (r.get(tf) or 0) for r in sheet_spec.get("rows", [])
-                        if isinstance(r.get(tf), (int, float))
-                    )
+                    sm = 0
+                    for r in sheet_spec.get("rows", []):
+                        v = r.get(tf)
+                        if v is None or v == "":
+                            continue
+                        try:
+                            sm += float(v)
+                        except (ValueError, TypeError):
+                            pass
                     total_row[idx] = sm
             ws.append(total_row)
 

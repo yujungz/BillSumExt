@@ -734,6 +734,7 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
 
         file_size = os.path.getsize(file_path)
         log.info(f"[export-{task_id}] Saved, file_size={file_size}, detail={detail_total}")
+        task["file_path"] = file_path
         task["status"] = "done"
 
     except Exception as e:
