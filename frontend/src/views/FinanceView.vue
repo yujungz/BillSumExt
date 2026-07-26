@@ -57,21 +57,31 @@
             <el-tabs v-model="userStatsSubTab" class="sub-tabs">
               <el-tab-pane label="月汇总" name="monthly">
                 <div ref="monthlyTableWrapper" class="table-wrapper sub-table-wrapper">
-                  <el-table :data="sortedMonthly" border stripe :height="subTableHeight" v-loading="userStatsLoading"
+                  <el-table :data="pagedMonthly" border stripe :height="subTableHeight - 42" v-loading="userStatsLoading"
                     :element-loading-text="userStatsLoadingText || '加载中'"
                     style="width: 100%" show-overflow-tooltip show-summary :summary-method="userStatsSummary">
                     <el-table-column v-for="col in userStatsMonthlyCols" :key="col.key" :prop="col.key" :label="col.label"
                       :width="col.width" :formatter="col.formatter" />
                   </el-table>
+                  <PaginationBar
+                    :total="sortedMonthly.length"
+                    v-model:current-page="monthlyPage"
+                    v-model:page-size="monthlyPageSize"
+                  />
                 </div>
               </el-tab-pane>
               <el-tab-pane label="日统计" name="daily">
                 <div ref="dailyTableWrapper" class="table-wrapper sub-table-wrapper">
-                  <el-table :data="sortedDaily" border stripe :height="subTableHeight" v-loading="userStatsLoading"
+                  <el-table :data="pagedDaily" border stripe :height="subTableHeight - 42" v-loading="userStatsLoading"
                     style="width: 100%" show-overflow-tooltip show-summary :summary-method="userStatsSummary">
                     <el-table-column v-for="col in userStatsDailyCols" :key="col.key" :prop="col.key" :label="col.label"
                       :width="col.width" :formatter="col.formatter" />
                   </el-table>
+                  <PaginationBar
+                    :total="sortedDaily.length"
+                    v-model:current-page="dailyPage"
+                    v-model:page-size="dailyPageSize"
+                  />
                 </div>
               </el-tab-pane>
               <el-tab-pane v-if="showDetail" label="用户明细" name="detail">
@@ -487,6 +497,10 @@ const userStatsDetail = ref([])
 const userStatsDetailTotal = ref(0)
 const userStatsDetailPage = ref(1)
 const userStatsDetailPageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
+const monthlyPage = ref(1)
+const monthlyPageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
+const dailyPage = ref(1)
+const dailyPageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
 const userStatsLoading = ref(false)
 const userStatsSubTab = ref('monthly')
 
@@ -616,6 +630,16 @@ const sortedDaily = computed(() => {
     return ua - ub
   })
   return rows
+})
+
+// 月汇总/日统计分页
+const pagedMonthly = computed(() => {
+  const start = (monthlyPage.value - 1) * monthlyPageSize.value
+  return sortedMonthly.value.slice(start, start + monthlyPageSize.value)
+})
+const pagedDaily = computed(() => {
+  const start = (dailyPage.value - 1) * dailyPageSize.value
+  return sortedDaily.value.slice(start, start + dailyPageSize.value)
 })
 
 // Detail summary uses backend-computed totals across ALL records (not just current page)
@@ -780,6 +804,8 @@ async function doUserStatsQuery() {
     saveGranularity()
     userStatsMonthly.value = result.monthly || []
     userStatsDaily.value = result.daily || []
+    monthlyPage.value = 1
+    dailyPage.value = 1
     userStatsDetailTotal.value = 0
     userStatsDetail.value = []
     userStatsDetailTotals.value = {}
