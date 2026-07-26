@@ -108,6 +108,29 @@ def main():
                         for row in sspec.get("rows", []):
                             rn += 1
                             wf.write(_build_row_bytes(rn, [row.get(cn) for cn in col_names]))
+
+                        # 合计行(可选)
+                        total_fields = sspec.get("total_fields")
+                        if total_fields and rn > 1:
+                            rn += 1  # 空行
+                            wf.write(_build_row_bytes(rn, [""] * len(col_labels)))
+                            rn += 1
+                            total_vals = ["合计"] + [""] * (len(col_labels) - 1)
+                            for tf in total_fields:
+                                idx = col_names.index(tf) if tf in col_names else -1
+                                if idx >= 0:
+                                    sm = 0
+                                    for r in sspec.get("rows", []):
+                                        v = r.get(tf)
+                                        if v is None or v == "":
+                                            continue
+                                        try:
+                                            sm += float(v)
+                                        except (ValueError, TypeError):
+                                            pass
+                                    total_vals[idx] = sm
+                            wf.write(_build_row_bytes(rn, total_vals))
+
                         wf.write(_WS_CLOSE)
 
                     zf.write(tmp, f"xl/worksheets/sheet{sheet_count}.xml")
