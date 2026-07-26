@@ -221,12 +221,17 @@
             </el-form>
 
             <div ref="supplierTableWrapper" class="table-wrapper">
-              <el-table :data="supplierData" border stripe :height="supplierTableHeight" v-loading="supplierLoading"
+              <el-table :data="pagedSupplierData" border stripe :height="supplierTableHeight - 42" v-loading="supplierLoading"
                 :element-loading-text="supplierLoadingText || '加载中'"
                 style="width: 100%" show-overflow-tooltip>
                 <el-table-column v-for="col in supplierColumns" :key="col.key" :prop="col.key" :label="col.label"
                   :width="col.width" :formatter="col.formatter" />
               </el-table>
+              <PaginationBar
+                :total="supplierData.length"
+                v-model:current-page="supplierPage"
+                v-model:page-size="supplierPageSize"
+              />
             </div>
           </div>
         </el-tab-pane>
@@ -288,6 +293,12 @@ function stopTimer(t0) {
 const logTables = ref([])
 const usernames = ref([])
 const supplierData = ref([])
+const supplierPage = ref(1)
+const supplierPageSize = ref(parseInt(localStorage.getItem('billsum_page_size')) || 20)
+const pagedSupplierData = computed(() => {
+  const start = (supplierPage.value - 1) * supplierPageSize.value
+  return supplierData.value.slice(start, start + supplierPageSize.value)
+})
 const supplierLoading = ref(false)
 const supplierLoadingText = ref('')
 let _supplierGen = 0
@@ -439,10 +450,12 @@ async function doSupplierQuery() {
       }
       if (rows === null || gen !== _supplierGen) return
       supplierData.value = rows
+      supplierPage.value = 1
     } else {
       // 单用户：同步
       const { data } = await api.finance.supplier(params)
       supplierData.value = data.rows || []
+      supplierPage.value = 1
     }
     financeQueryElapsed.value = ((Date.now() - t0) / 1000).toFixed(1)
   } catch (e) {
