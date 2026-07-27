@@ -587,12 +587,14 @@ const _NO_SUM_KEYS_STATS = new Set([
   '折扣', '汇率',
 ])
 
-function userStatsSummary({ columns, data }) {
+function userStatsSummary({ columns }) {
+  // 用全量数据计算合计(非当前页)
+  const allData = userStatsSubTab.value === 'monthly' ? sortedMonthly.value : sortedDaily.value
   return columns.map((col, i) => {
     if (i === 0) return '合计'
     const key = col.property
     if (!key || _NO_SUM_KEYS_STATS.has(key)) return ''
-    const vals = data.map(r => Number(r[key])).filter(v => !isNaN(v))
+    const vals = allData.map(r => Number(r[key])).filter(v => !isNaN(v))
     if (!vals.length) return ''
     const sum = vals.reduce((a, b) => a + b, 0)
     // Match the column's formatter
