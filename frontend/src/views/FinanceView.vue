@@ -863,6 +863,8 @@ async function loadUserStatsDetail() {
     userStatsDetailTotals.value = data.totals || {}
   } catch (e) {
     console.error('loadUserStatsDetail failed', e)
+    const msg = e.response?.data?.detail || e.message || '用户明细加载失败'
+    ElMessage.error(msg)
   } finally {
     userStatsLoading.value = false
   }
