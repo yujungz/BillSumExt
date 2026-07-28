@@ -40,7 +40,7 @@
       <el-button :loading="resetting" @click="resetConfig">重置配置</el-button>
       <el-checkbox v-model="skipImport" :disabled="running" style="margin-left: 8px">导入目的库</el-checkbox>
       <el-button type="danger" :disabled="running" :loading="starting" @click="startTransfer">开始传导</el-button>
-      <el-button v-if="taskDone && hasTgz" type="primary" :icon="Download" plain @click="downloadTgz">下载 {{ downloadName }}</el-button>
+      <el-button v-if="taskDone && hasTgz" type="primary" :icon="Download" :loading="downloading" plain @click="downloadTgz">下载 {{ downloadName }}</el-button>
     </el-space>
 
     <div v-if="timerRunning || elapsed" class="timer-bar">
@@ -122,6 +122,7 @@ const taskId = ref(null)
 const hasTgz = ref(false)
 const downloadName = ref('')
 const taskDone = ref(false)
+const downloading = ref(false)
 const skipImport = ref(true)
 const logs = ref([])
 const elapsed = ref(0)
@@ -342,19 +343,45 @@ function pollTask(id) {
 }
 
 async function downloadTgz() {
-  if (!taskId.value) return
+  if (!taskId.value || downloading.value) return
+  const fileName = downloadName.value || 'backup.tgz'
+  // 先弹「另存为」对话框(含文件夹选择)，确认后再下载；取消则不下载
+  let saveHandle = null
+  if (window.showSaveFilePicker) {
+    try {
+      saveHandle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: '备份压缩包', accept: { 'application/gzip': ['.tgz', '.tar.gz'] } }],
+      })
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') return  // 用户取消 → 不下载
+      ElMessage.error('选择保存位置失败: ' + e.message)
+      return
+    }
+  }
+  downloading.value = true
   try {
     const res = await api.conduction.download(taskId.value)
-    const url = URL.createObjectURL(res.data)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = downloadName.value || 'backup.tgz'
-    document.body.appendChild(a)
-    a.click()
-    a.remove()
-    URL.revokeObjectURL(url)
+    if (saveHandle) {
+      const writable = await saveHandle.createWritable()
+      await writable.write(res.data)
+      await writable.close()
+      ElMessage.success(`已保存到 ${saveHandle.name}`)
+    } else {
+      // 浏览器不支持文件选择器，退回到默认下载
+      const url = URL.createObjectURL(res.data)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = fileName
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      URL.revokeObjectURL(url)
+    }
   } catch (e) {
     ElMessage.error('下载失败: ' + (e.response?.data?.detail || e.message))
+  } finally {
+    downloading.value = false
   }
 }
 
