@@ -12,7 +12,7 @@
       </el-select>
       <el-button v-if="!isDefaultSelected && selectedName" type="danger" plain size="small" :icon="Delete" :loading="deleting" @click="deleteGroup">删除</el-button>
       <span class="group-label">备注</span>
-      <el-input v-model="remark" placeholder="为该参数组填写说明（可空）" style="width: 280px" />
+      <el-input v-model="remark" placeholder="为该参数组填写说明（可空）" style="width: 560px" />
     </div>
 
     <el-row :gutter="12">
