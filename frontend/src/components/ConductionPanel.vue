@@ -11,6 +11,8 @@
         <el-option v-for="g in groups" :key="g.name" :label="g.name" :value="g.name" />
       </el-select>
       <el-button v-if="!isDefaultSelected && selectedName" type="danger" plain size="small" :icon="Delete" :loading="deleting" @click="deleteGroup">删除</el-button>
+      <span class="group-label">备注</span>
+      <el-input v-model="remark" placeholder="为该参数组填写说明（可空）" style="width: 280px" />
     </div>
 
     <el-row :gutter="12">
@@ -99,6 +101,7 @@ const config = reactive({
 const groups = ref([])
 const selectedName = ref('')
 const addNew = ref(false)
+const remark = ref('')
 const isDefaultSelected = computed(() => selectedName.value === DEFAULT_GROUP_NAME)
 
 // when the default group becomes selected, lock the 新增 checkbox (checked+disabled)
@@ -169,6 +172,7 @@ function loadGroupIntoForm(name) {
   if (!g) return
   patchEndpoint(config.source, g.source)
   patchEndpoint(config.destination, g.destination)
+  remark.value = g.remark || ''
 }
 
 function onSelectGroup(name) {
@@ -232,14 +236,14 @@ async function saveConfig() {
   try {
     const src = JSON.parse(JSON.stringify(config.source))
     const dst = JSON.parse(JSON.stringify(config.destination))
-    const newGroups = groups.value.map(g => ({ name: g.name, source: g.source, destination: g.destination }))
+    const newGroups = groups.value.map(g => ({ name: g.name, source: g.source, destination: g.destination, remark: g.remark || '' }))
     if (addNew.value) {
       // req 4: 新增 → create a new named group
       const rand = String(Math.floor(Math.random() * 900) + 100)
       const base = `${groupName(src, dst)}:${rand}`
       let name = base, n = 2
       while (newGroups.some(g => g.name === name)) { name = `${base} (${n})`; n++ }
-      newGroups.push({ name, source: src, destination: dst })
+      newGroups.push({ name, source: src, destination: dst, remark: remark.value })
       selectedName.value = name
     } else {
       // req 4: not 新增 → update the selected group (default is locked to 新增, so never here for default)
@@ -248,7 +252,7 @@ async function saveConfig() {
         ElMessage.error('未找到当前配置组')
         return
       }
-      newGroups[idx] = { name: newGroups[idx].name, source: src, destination: dst }
+      newGroups[idx] = { name: newGroups[idx].name, source: src, destination: dst, remark: remark.value }
     }
     await api.conduction.saveConfig({ groups: newGroups, selected: selectedName.value })
     groups.value = newGroups
@@ -378,7 +382,7 @@ function formatSec(sec) {
 
 const STATE_KEY = 'billsum_conduction_state'
 // bump when the persisted shape / endpoint defaults change, to drop stale cache
-const DEFAULTS_VER = 4
+const DEFAULTS_VER = 5
 
 async function loadServerConfig() {
   try {
@@ -398,6 +402,7 @@ function saveState() {
     groups: groups.value,
     selectedName: selectedName.value,
     addNew: addNew.value,
+    remark: remark.value,
     source: config.source,
     destination: config.destination,
     sourceTables: sourceTables.value,
@@ -422,6 +427,7 @@ function loadState() {
     groups.value = s.groups || []
     selectedName.value = s.selectedName || ''
     addNew.value = !!s.addNew
+    remark.value = s.remark || ''
     if (s.source) patchEndpoint(config.source, s.source)
     if (s.destination) patchEndpoint(config.destination, s.destination)
     sourceTables.value = s.sourceTables || []
@@ -439,7 +445,7 @@ function loadState() {
 
 // persist working state across tab/route switches and page reloads
 watch(
-  [() => config, groups, selectedName, addNew, logs, elapsed, timerRunning, taskId, sourceTables, hasTgz, downloadName, taskDone],
+  [() => config, groups, selectedName, addNew, remark, logs, elapsed, timerRunning, taskId, sourceTables, hasTgz, downloadName, taskDone],
   saveState,
   { deep: true }
 )

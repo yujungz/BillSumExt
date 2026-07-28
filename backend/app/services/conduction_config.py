@@ -49,6 +49,7 @@ class CondGroup(BaseModel):
     name: str
     source: CondEndpoint
     destination: CondEndpoint
+    remark: str = ""               # 自由备注, 可空
 
 
 class CondConfig(BaseModel):
