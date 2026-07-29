@@ -209,7 +209,8 @@ async def user_monthly(site: str, table: str, username: str,
                        date_start: str, date_end: str,
                        show_model: bool = False,
                        with_platform: bool = False, with_total_cost: bool = False,
-                       monthly_settle: bool = False) -> list[dict]:
+                       monthly_settle: bool = False,
+                       with_discount: bool = False) -> list[dict]:
     config = AppConfig.load()
     db_name = config.db_name(site)
     dw, dp = _date_where(date_start, date_end)
@@ -221,6 +222,20 @@ async def user_monthly(site: str, table: str, username: str,
     if monthly_settle:
         settle_join = "\n      LEFT JOIN ex_users ON l.user_id = ex_users.id"
         settle_sel = ",\n      ROUND(MAX(ex_users.discount), 2) AS `折扣`"
+    # 折扣额度: 用户折扣(us_discount, 0/NULL→0.6) + 折后额度 = 基数×有效折扣
+    discount_sel = ""
+    if with_discount:
+        eff = "COALESCE(NULLIF(l.us_discount,0),0.6)"
+        if with_total_cost and not with_platform:
+            base = (f"l.group_ratio*l.model_ratio*2*(l.prompt_tokens"
+                    f"+l.completion_ratio*l.completion_tokens"
+                    f"+l.cache_ratio*l.cache_tokens"
+                    f"+1.25*l.cache_creation_tokens_5m"
+                    f"+2.00*{_1H_CASE})/1000000")
+        else:
+            base = "l.quota*2/1000000"
+        discount_sel = (f",\n      ROUND(MAX({eff}), 2) AS `用户折扣`"
+                        f",\n      ROUND(SUM({base}*{eff}), 6) AS `折后额度`")
     sql = f"""
     SELECT
       CONCAT(DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%m'),'月份') AS `结算周期`,
@@ -233,7 +248,7 @@ async def user_monthly(site: str, table: str, username: str,
         +l.cache_ratio*l.cache_tokens
         +1.25*l.cache_creation_tokens_5m
         +2.00*{_1H_CASE})/1000000), 6) AS `消费额度`,
-      SUM(l.quota)*2/1000000 AS `平台额度`{settle_sel}
+      SUM(l.quota)*2/1000000 AS `平台额度`{settle_sel}{discount_sel}
     FROM `{table}` l{settle_join}
     WHERE l.windup_type < 2{uw}{dw}
     GROUP BY CONCAT(DATE_FORMAT(FROM_UNIXTIME(l.created_at+28800), '%%m'),'月份'), l.user_id, l.username{extra_grp}
@@ -260,7 +275,9 @@ async def user_monthly(site: str, table: str, username: str,
 
 async def user_daily(site: str, table: str, username: str,
                      date_start: str, date_end: str,
-                     show_model: bool = False, show_token: bool = False) -> list[dict]:
+                     show_model: bool = False, show_token: bool = False,
+                     with_platform: bool = False, with_total_cost: bool = False,
+                     with_discount: bool = False) -> list[dict]:
     config = AppConfig.load()
     db_name = config.db_name(site)
     dw, dp = _date_where(date_start, date_end)
@@ -273,6 +290,20 @@ async def user_daily(site: str, table: str, username: str,
     if show_token:
         extra_sel += ",\n      l.token_name AS `Token名称`"
         extra_grp += ", l.token_name"
+    # 折扣额度: 用户折扣(us_discount, 0/NULL→0.6) + 折后额度 = 基数×有效折扣
+    discount_sel = ""
+    if with_discount:
+        eff = "COALESCE(NULLIF(l.us_discount,0),0.6)"
+        if with_total_cost and not with_platform:
+            base = (f"l.group_ratio*l.model_ratio*2*(l.prompt_tokens"
+                    f"+l.completion_ratio*l.completion_tokens"
+                    f"+l.cache_ratio*l.cache_tokens"
+                    f"+1.25*l.cache_creation_tokens_5m"
+                    f"+2.00*{_1H_CASE})/1000000")
+        else:
+            base = "l.quota*2/1000000"
+        discount_sel = (f",\n      ROUND(MAX({eff}), 2) AS `用户折扣`"
+                        f",\n      ROUND(SUM({base}*{eff}), 6) AS `折后额度`")
     sql = f"""
     SELECT
       l.user_id AS `用户ID`,
@@ -289,7 +320,7 @@ async def user_daily(site: str, table: str, username: str,
         +l.cache_ratio*l.cache_tokens
         +1.25*l.cache_creation_tokens_5m
         +2.00*{_1H_CASE})/1000000), 6) AS `消费额度`,
-      SUM(l.quota)*2/1000000 AS `平台额度`
+      SUM(l.quota)*2/1000000 AS `平台额度`{discount_sel}
     FROM `{table}` l
     WHERE l.windup_type < 2{uw}{dw}
     GROUP BY l.user_id, l.username{extra_grp},
@@ -414,7 +445,8 @@ def start_export_task(site: str, table: str, username: str,
                       with_platform: bool, with_detail: bool = True,
                       show_model: bool = False, show_token: bool = False,
                       with_total_cost: bool = True,
-                      monthly_settle: bool = False) -> str:
+                      monthly_settle: bool = False,
+                      with_discount: bool = False) -> str:
     """Start a background export task, return task_id immediately."""
     task_id = uuid.uuid4().hex[:8]
     _export_tasks[task_id] = {
@@ -436,7 +468,7 @@ def start_export_task(site: str, table: str, username: str,
         try:
             await _run_export(task_id, site, table, username, date_start, date_end,
                               with_platform, with_detail, show_model, show_token,
-                              with_total_cost, monthly_settle)
+                              with_total_cost, monthly_settle, with_discount)
         except Exception as e:
             log.exception(f"[export-{task_id}] Failed: {e}")
             _export_tasks[task_id]["status"] = "failed"
@@ -470,7 +502,8 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
                       with_detail: bool = True,
                       show_model: bool = False, show_token: bool = False,
                       with_total_cost: bool = True,
-                      monthly_settle: bool = False):
+                      monthly_settle: bool = False,
+                      with_discount: bool = False):
     """Generate xlsx file via subprocess (avoids GIL blocking uvicorn)."""
     import json as _json
     import subprocess as _sp
@@ -487,8 +520,9 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
     # 1. Fetch monthly & daily (small datasets, async)
     task["progress"] = "查询汇总数据..."
     monthly = await user_monthly(site, table, username, date_start, date_end, show_model,
-                                 with_platform, with_total_cost, monthly_settle)
-    daily = await user_daily(site, table, username, date_start, date_end, show_model, show_token)
+                                 with_platform, with_total_cost, monthly_settle, with_discount)
+    daily = await user_daily(site, table, username, date_start, date_end, show_model, show_token,
+                             with_platform, with_total_cost, with_discount)
 
     # 2. Count detail rows
     uw, up = _user_where(username)
@@ -509,6 +543,8 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
         daily = _strip_platform(daily, {"消费额度"})
 
     total_summary = (["消费额度"] if with_total_cost else []) + (["平台额度"] if with_platform else [])
+    if with_discount:
+        total_summary = total_summary + ["折后额度"]
 
     # 4. Build spec JSON for summary sheets (monthly + daily)
     summary_sheets = []

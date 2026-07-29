@@ -36,6 +36,7 @@
               <el-form-item>
                 <el-checkbox v-model="showPlatformQuota" label="平台额度" style="margin-right: 8px" />
                 <el-checkbox v-model="showTotalCost" label="消费额度" style="margin-right: 8px" />
+                <el-checkbox v-model="showDiscountAmount" label="折扣额度" style="margin-right: 8px" />
                 <el-checkbox v-model="showDetail" label="用户明细" style="margin-right: 8px" />
                 <el-select v-model="sortMode" size="small" style="width: 120px; margin-right: 8px">
                   <el-option label="按用户ID排序" value="用户ID" />
@@ -519,6 +520,7 @@ const userStatsSubTab = ref('monthly')
 
 const showTotalCost = ref(false)
 const showPlatformQuota = ref(true)
+const showDiscountAmount = ref(false)
 const batchExport = ref(false)
 const showDetail = ref(false)
 const mergeExport = ref(false)
@@ -584,7 +586,7 @@ const _NO_SUM_KEYS_STATS = new Set([
   '结算周期', '用户名', '模型名', '用户ID', 'Token名称', '日期',
   '序号', '时间',
   '输入单价', '输出单价', '读取缓存单价', '创建缓存5M单价', '创建缓存1H单价',
-  '折扣', '汇率',
+  '折扣', '汇率', '用户折扣',
 ])
 
 function userStatsSummary({ columns }) {
@@ -687,6 +689,10 @@ const userStatsMonthlyCols = computed(() => {
   )
   if (showTotalCost.value) cols.push({ key: '消费额度', label: '消费额度', width: 120, formatter: fmt6 })
   if (showPlatformQuota.value) cols.push({ key: '平台额度', label: '平台额度', width: 120, formatter: fmt6 })
+  if (showDiscountAmount.value) {
+    cols.push({ key: '用户折扣', label: '用户折扣', width: 90, formatter: fmt2 })
+    cols.push({ key: '折后额度', label: '折后额度', width: 120, formatter: fmt6 })
+  }
   if (monthlySettle.value) {
     cols.push({ key: '折扣', label: '折扣', width: 90, formatter: fmt2 })
     cols.push({ key: '汇率', label: '汇率', width: 90, formatter: fmt2 })
@@ -713,6 +719,10 @@ const userStatsDailyCols = computed(() => {
   )
   if (showTotalCost.value) cols.push({ key: '消费额度', label: '消费额度', width: 110, formatter: fmt6 })
   if (showPlatformQuota.value) cols.push({ key: '平台额度', label: '平台额度', width: 110, formatter: fmt6 })
+  if (showDiscountAmount.value) {
+    cols.push({ key: '用户折扣', label: '用户折扣', width: 90, formatter: fmt2 })
+    cols.push({ key: '折后额度', label: '折后额度', width: 110, formatter: fmt6 })
+  }
   return cols
 })
 
@@ -797,6 +807,7 @@ async function doUserStatsQuery() {
       with_platform: showPlatformQuota.value,
       with_total_cost: showTotalCost.value,
       monthly_settle: monthlySettle.value,
+      with_discount: showDiscountAmount.value,
     }
     if (userStatsForm.dateStart) params.date_start = userStatsForm.dateStart
     if (userStatsForm.dateEnd) params.date_end = userStatsForm.dateEnd
@@ -936,6 +947,7 @@ async function _doSingleExport(saveHandle, fileName) {
     with_detail: showDetail.value,
     with_total_cost: showTotalCost.value,
     monthly_settle: monthlySettle.value,
+    with_discount: showDiscountAmount.value,
     granularity: granularityStr.value,
   })
   const taskId = td.task_id
@@ -1012,6 +1024,7 @@ async function _doBatchExport() {
           with_detail: showDetail.value,
           with_total_cost: showTotalCost.value,
           monthly_settle: monthlySettle.value,
+          with_discount: showDiscountAmount.value,
           granularity: granularityStr.value,
         })
         const taskId = td.task_id

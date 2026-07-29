@@ -203,14 +203,17 @@ async def user_stats(
     with_platform: bool = Query(False),
     with_total_cost: bool = Query(False),
     monthly_settle: bool = Query(False),
+    with_discount: bool = Query(False),
 ):
     try:
         glist = [x.strip() for x in granularity.split(",") if x.strip()] if granularity else []
         show_model = "model" in glist
         show_token = "token" in glist
         monthly = await finance_service.user_monthly(site, table, username, date_start, date_end,
-                                                     show_model, with_platform, with_total_cost, monthly_settle)
-        daily = await finance_service.user_daily(site, table, username, date_start, date_end, show_model, show_token)
+                                                     show_model, with_platform, with_total_cost, monthly_settle,
+                                                     with_discount)
+        daily = await finance_service.user_daily(site, table, username, date_start, date_end, show_model, show_token,
+                                                 with_platform, with_total_cost, with_discount)
         return {"monthly": monthly, "daily": daily}
     except Exception as e:
         raise HTTPException(500, detail=str(e))
@@ -243,6 +246,7 @@ async def user_stats_query_async(body: dict):
     with_platform = body.get("with_platform", False)
     with_total_cost = body.get("with_total_cost", False)
     monthly_settle = body.get("monthly_settle", False)
+    with_discount = body.get("with_discount", False)
 
     async def _run():
         try:
@@ -250,8 +254,10 @@ async def user_stats_query_async(body: dict):
             show_model = "model" in glist
             show_token = "token" in glist
             monthly = await finance_service.user_monthly(site, table, username, date_start, date_end,
-                                                         show_model, with_platform, with_total_cost, monthly_settle)
-            daily = await finance_service.user_daily(site, table, username, date_start, date_end, show_model, show_token)
+                                                         show_model, with_platform, with_total_cost, monthly_settle,
+                                                         with_discount)
+            daily = await finance_service.user_daily(site, table, username, date_start, date_end, show_model, show_token,
+                                                     with_platform, with_total_cost, with_discount)
             _USER_STATS_QUERY_TASKS[task_id]["result"] = {"monthly": monthly, "daily": daily}
             _USER_STATS_QUERY_TASKS[task_id]["status"] = "done"
         except Exception as e:
@@ -339,6 +345,7 @@ async def user_stats_export_async(body: dict):
     with_detail = body.get("with_detail", True)
     with_total_cost = body.get("with_total_cost", True)
     monthly_settle = body.get("monthly_settle", False)
+    with_discount = body.get("with_discount", False)
     granularity = body.get("granularity", "")
     glist = [x.strip() for x in granularity.split(",") if x.strip()] if granularity else []
     show_model = "model" in glist
@@ -347,7 +354,7 @@ async def user_stats_export_async(body: dict):
         raise HTTPException(400, detail="site, table 不能为空")
     task_id = finance_service.start_export_task(
         site, table, username, date_start, date_end, with_platform, with_detail,
-        show_model, show_token, with_total_cost, monthly_settle
+        show_model, show_token, with_total_cost, monthly_settle, with_discount
     )
     return {"task_id": task_id}
 
