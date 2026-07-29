@@ -606,14 +606,16 @@ async def _run_export(task_id: str, site: str, table: str, username: str,
               ROUND(l.group_ratio*l.model_ratio*2*(1.25*l.cache_creation_tokens_5m
                 +l.cache_ratio*l.cache_tokens
                 +2.00*{_1H_CASE})/1000000, 6) AS `缓存总费用`,
-              {_GREATEST}+l.cache_tokens+l.completion_tokens+l.prompt_tokens AS `总消耗token`,
-              ROUND(l.group_ratio*l.model_ratio*2*(l.prompt_tokens
-                +l.completion_ratio*l.completion_tokens
-                +l.cache_ratio*l.cache_tokens
-                +1.25*l.cache_creation_tokens_5m
-                +2.00*{_1H_CASE})/1000000, 6) AS `消费额度`""" \
-              + (",\n              l.quota*2/1000000 AS `平台额度`" if with_platform else "") \
-              + f"""
+              {_GREATEST}+l.cache_tokens+l.completion_tokens+l.prompt_tokens AS `总消耗token`"""
+            # 末尾按开关追加 消费额度 / 平台额度(awk 按 TSV 表头取列, 导出列由 SQL 决定)
+            _tail = []
+            if with_total_cost:
+                _tail.append(f"ROUND(l.group_ratio*l.model_ratio*2*(l.prompt_tokens+l.completion_ratio*l.completion_tokens+l.cache_ratio*l.cache_tokens+1.25*l.cache_creation_tokens_5m+2.00*{_1H_CASE})/1000000, 6) AS `消费额度`")
+            if with_platform:
+                _tail.append("l.quota*2/1000000 AS `平台额度`")
+            if _tail:
+                detail_sql += ",\n              " + ",\n              ".join(_tail)
+            detail_sql += f"""
             FROM `{table}` l
             WHERE l.windup_type < 2{uw}{dw}
             ORDER BY l.created_at DESC"""
