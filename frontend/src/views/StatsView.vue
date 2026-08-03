@@ -245,9 +245,9 @@ const allColumns = [
 
 // 收集所有粒度相关的列 key
 const groupedKeySet = new Set(Object.values(GROUP_COL_KEYS).flat())
-// 可选数据列：从「输入单价」开始往后（前面的调用次数/输入token 等始终显示）
+// 可选数据列：从「输入token」开始往后（前面的调用次数始终显示）
 const SELECTABLE_COL_KEYS = new Set(
-  allColumns.slice(allColumns.findIndex(c => c.key === 'input_unit_price')).map(c => c.key)
+  allColumns.slice(allColumns.findIndex(c => c.key === 'input_tokens')).map(c => c.key)
 )
 
 // ── 字段选择（数据列显隐），默认全选，持久化到 localStorage ──
