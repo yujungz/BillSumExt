@@ -747,6 +747,11 @@ async def parse_table(site: str = Query(...), table: str = Query(...)):
         'users': parser_service.parse_users,
     }[table]
 
+    # 拆解前确保统计表 ex_{table} 存在; 不存在则按其它站点结构建表
+    ensure_status = await parser_service.ensure_ex_table(site, table)
+    if ensure_status == 'no_donor':
+        raise HTTPException(400, detail=f"统计表 `ex_{table}` 不存在，且没有其它站点的该表可作为结构模板，请先在任一站点建立。")
+
     try:
         result = await parse_fn(site)
         content = parser_service.build_excel_bytes(table, result["excel_headers"], result["excel_data"])

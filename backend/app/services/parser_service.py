@@ -610,6 +610,46 @@ _EX_DB_COLS = {
     'users': ['id', 'seller', 'remark', 'discount'],
 }
 
+_EX_TARGET = {'channels': 'ex_channels', 'tokens': 'ex_tokens', 'users': 'ex_users'}
+
+
+async def ensure_ex_table(site: str, raw_table: str) -> str:
+    """确保 sum_{site} 中存在 ex_{raw_table}; 不存在则按其它站点同名表结构建表
+    (CREATE TABLE ... LIKE, 仅克隆结构, 不含数据)。
+    返回 'exists' | 'created:<donor_db>' | 'no_donor'。"""
+    ex_table = _EX_TARGET.get(raw_table)
+    if not ex_table:
+        return 'exists'
+    config = AppConfig.load()
+    db_name = config.db_name(site)
+
+    # 1. 目标库是否已有该表
+    row = await db.fetch_one(
+        "SELECT 1 FROM information_schema.tables WHERE table_schema=%s AND table_name=%s",
+        [db_name, ex_table], db=db_name,
+    )
+    if row:
+        return 'exists'
+
+    # 2. 从其它站点库克隆结构(参考已有站点的表结构)
+    for other_site in config.sites:
+        other_db = config.db_name(other_site)
+        if other_db == db_name:
+            continue
+        donor = await db.fetch_one(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=%s AND table_name=%s",
+            [other_db, ex_table], db=db_name,
+        )
+        if donor:
+            await db.execute(
+                f"CREATE TABLE `{db_name}`.`{ex_table}` LIKE `{other_db}`.`{ex_table}`",
+                db=db_name,
+            )
+            log.info(f"[ensure_ex_table] created {db_name}.{ex_table} LIKE {other_db}.{ex_table}")
+            return f'created:{other_db}'
+    log.warning(f"[ensure_ex_table] no donor site has {ex_table}; cannot create in {db_name}")
+    return 'no_donor'
+
 
 async def parse_channels(site: str) -> dict:
     """Parse channels table → return Excel data (no DB write)."""
