@@ -94,6 +94,7 @@ export default {
   // Settings
   settings: {
     get: () => api.get('/settings'),
+    sites: () => api.get('/settings/sites'),
     save: (data) => api.put('/settings', data),
     testMysql: (data) => api.post('/settings/test-mysql', data),
     testSsh: (data) => api.post('/settings/test-ssh', data),

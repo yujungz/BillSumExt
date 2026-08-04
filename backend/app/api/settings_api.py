@@ -44,6 +44,13 @@ async def get_settings():
     return config.model_dump()
 
 
+@router.get("/sites")
+async def get_site_list():
+    """轻量站点名列表(供各视图站点下拉), 不含敏感字段。"""
+    config = AppConfig.load()
+    return {"sites": list(config.sites.keys())}
+
+
 @router.put("")
 async def save_settings(body: AppConfigUpdate):
     config = AppConfig.load()

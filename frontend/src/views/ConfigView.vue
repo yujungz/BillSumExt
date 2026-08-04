@@ -118,6 +118,7 @@ import { ref, reactive, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Plus, Minus } from '@element-plus/icons-vue'
 import api from '../api'
+import { refreshSites } from '../composables/useSites'
 
 const DEFAULT_SITE_NAMES = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
 const sites = ref([...DEFAULT_SITE_NAMES])
@@ -236,6 +237,7 @@ async function addSite() {
   activeSite.value = name
   ElMessage.success(`已新增站点 ${name}（本地库 sum_${name}）`)
   await persistConfig()
+  await refreshSites()
 }
 
 async function deleteSite() {
@@ -259,6 +261,7 @@ async function deleteSite() {
   activeSite.value = next
   ElMessage.success(`已删除站点 ${site}`)
   await persistConfig()
+  await refreshSites()
 }
 
 function triggerMount(site) {

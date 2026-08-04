@@ -247,8 +247,9 @@ import { ElMessage } from 'element-plus'
 import { Download } from '@element-plus/icons-vue'
 import api from '../api'
 import PaginationBar from '../components/PaginationBar.vue'
+import { useSites } from '../composables/useSites'
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
+const { sites } = useSites()
 const activeTab = ref('userStats')
 
 // ── Shared formatters ──
@@ -355,6 +356,9 @@ const supplierColumns = computed(() => {
 const supplierTableWrapper = ref(null)
 const supplierTableHeight = ref(400)
 let supplierResizeObserver = null
+
+// 站点列表动态加载(配置页增删后响应式更新); 默认站点失效则回退首个
+watch(sites, (arr) => { if (arr.length && !arr.includes(userStatsForm.site)) userStatsForm.site = arr[0] }, { immediate: true })
 
 onMounted(async () => {
   await loadLogTables()

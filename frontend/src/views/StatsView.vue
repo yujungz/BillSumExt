@@ -122,15 +122,16 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { ElMessage } from 'element-plus'
 import { Operation } from '@element-plus/icons-vue'
 import api from '../api'
 import PaginationBar from '../components/PaginationBar.vue'
+import { useSites } from '../composables/useSites'
 
 defineOptions({ name: 'StatsView' })
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
+const { sites } = useSites()
 const logTables = ref([])
 const statsData = ref([])
 const loading = ref(false)
@@ -353,6 +354,9 @@ function parseTableDates(name) {
 const tableWrapper = ref(null)
 const tableHeight = ref(400)
 let resizeObserver = null
+
+// 站点列表动态加载(配置页增删后响应式更新); 默认站点失效则回退首个
+watch(sites, (arr) => { if (arr.length && !arr.includes(form.site)) form.site = arr[0] }, { immediate: true })
 
 onMounted(() => {
   // restore last saved 统计粒度 selection

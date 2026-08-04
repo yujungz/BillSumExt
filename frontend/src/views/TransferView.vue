@@ -105,10 +105,11 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
 import api from '../api'
 import ConductionPanel from '../components/ConductionPanel.vue'
+import { useSites } from '../composables/useSites'
 
 const STATE_KEY = 'billsum_transfer_state'
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
+const { sites } = useSites()
 const activeTab = ref('transfer')
 
 // ── Persistent state ──
@@ -464,6 +465,9 @@ function showResults(results) {
 }
 
 // ── Lifecycle ──
+
+// 站点列表动态加载(配置页增删后响应式更新); 默认站点失效则回退首个
+watch(sites, (arr) => { if (arr.length && !arr.includes(form.site)) form.site = arr[0] }, { immediate: true })
 
 onMounted(() => {
   loadState()
