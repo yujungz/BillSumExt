@@ -401,6 +401,7 @@ class StatsRequest(BaseModel):
     group_by: list[str] = []
     filters: dict | None = None
     show_zero: bool = True
+    show_zero_token: bool = True
     show_channel_name: bool = False
     show_log_detail: bool = False
     fields: str = ""
@@ -415,6 +416,7 @@ async def query_stats(req: StatsRequest):
         result = await stats_service.query_stats(
             req.site, req.table_name, req.group_by, req.filters, req.show_zero,
             show_channel_name=req.show_channel_name,
+            show_zero_token=req.show_zero_token,
         )
         return {"data": result}
     except Exception as e:
@@ -449,6 +451,7 @@ async def query_stats_async(req: StatsRequest):
             result = await stats_service.query_stats(
                 req.site, req.table_name, req.group_by, req.filters, req.show_zero,
                 show_channel_name=req.show_channel_name,
+                show_zero_token=req.show_zero_token,
             )
             _STATS_QUERY_TASKS[task_id]["result"] = result
             _STATS_QUERY_TASKS[task_id]["status"] = "done"
@@ -506,6 +509,7 @@ async def export_stats(req: StatsRequest):
     result = await stats_service.query_stats(
         req.site, req.table_name, req.group_by, req.filters, req.show_zero,
         show_channel_name=req.show_channel_name,
+        show_zero_token=req.show_zero_token,
     )
     if not result:
         return Response(content=b"", status_code=204)
@@ -669,6 +673,7 @@ async def export_stats_async(req: StatsRequest):
             result = await stats_service.query_stats(
                 req.site, req.table_name, req.group_by, req.filters, req.show_zero,
                 show_channel_name=req.show_channel_name,
+                show_zero_token=req.show_zero_token,
             )
             if not result:
                 t["status"] = "done"

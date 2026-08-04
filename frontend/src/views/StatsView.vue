@@ -50,6 +50,12 @@
               <el-radio :value="false">隐藏</el-radio>
             </el-radio-group>
           </el-form-item>
+          <el-form-item label="0 Token" class="zero-fee-group">
+            <el-radio-group v-model="form.show_zero_token">
+              <el-radio :value="true">显示</el-radio>
+              <el-radio :value="false">隐藏</el-radio>
+            </el-radio-group>
+          </el-form-item>
           <el-form-item>
             <el-checkbox v-model="form.desc_order" label="倒序" style="margin-right: 8px" />
             <el-checkbox v-model="showChannelName" label="渠道名称" style="margin-right: 8px" />
@@ -166,6 +172,7 @@ const form = reactive({
   date_end: '',
   group_by: [],
   show_zero: true,
+  show_zero_token: true,
   desc_order: true,
   filters: {
     username: '',
@@ -436,6 +443,7 @@ async function doQuery() {
       group_by: form.group_by,
       filters: Object.keys(filters).length ? filters : null,
       show_zero: form.show_zero,
+      show_zero_token: form.show_zero_token,
       show_channel_name: showChannelName.value,
     })
 
@@ -503,6 +511,7 @@ async function doExport(format = 'xlsx') {
     group_by: form.group_by,
     filters: Object.keys(filters).length ? filters : null,
     show_zero: form.show_zero,
+    show_zero_token: form.show_zero_token,
     show_channel_name: showChannelName.value,
     show_log_detail: showLogDetail.value,
     fields: JSON.stringify(exportFields.value),

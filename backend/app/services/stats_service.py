@@ -11,12 +11,14 @@ async def query_stats(
     filters: dict | None = None,
     show_zero: bool = True,
     show_channel_name: bool = True,
+    show_zero_token: bool = True,
 ) -> list[dict]:
     """Query statistics from a log table.
 
     group_by options: "month", "day", "user", "channel", "model", "token", "group"
     filters: {user_id, channel_id, model_name, username, channel_name}
     show_zero: if False, filter out records with zero total_cost
+    show_zero_token: if False, filter out records where input_tokens and output_tokens are both 0
     show_channel_name: if False, channel granularity skips channel_name column
     """
     config = AppConfig.load()
@@ -136,10 +138,13 @@ async def query_stats(
             conditions.append("l.created_at <= UNIX_TIMESTAMP(%s) - 28800")
             params.append(f"{filters['date_end']} 23:59:59")
 
-    # add HAVING clause for zero-cost filter at SQL level
-    having_clause = ""
+    # add HAVING clause for zero-cost / zero-token filter at SQL level
+    having_parts = []
     if not show_zero:
-        having_clause = "HAVING total_cost > 0"
+        having_parts.append("total_cost > 0")
+    if not show_zero_token:
+        having_parts.append("(input_tokens > 0 OR output_tokens > 0)")
+    having_clause = ("HAVING " + " AND ".join(having_parts)) if having_parts else ""
 
     where_clause = ""
     if conditions:
