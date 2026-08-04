@@ -1,6 +1,7 @@
 """Settings API - configuration management and connection testing."""
 
 import os
+import re
 import shutil
 from pathlib import Path
 
@@ -47,12 +48,20 @@ async def get_settings():
 async def save_settings(body: AppConfigUpdate):
     config = AppConfig.load()
     config.mysql = body.mysql
-    if body.sites:
-        for site_name, site_upd in body.sites.items():
-            if site_name in config.sites:
-                config.sites[site_name].ssh = site_upd.ssh
-                config.sites[site_name].remote_db = site_upd.remote_db
-                config.sites[site_name].uptnew_mode = site_upd.uptnew_mode
+    if body.sites is not None:
+        # 全量同步站点: 新增/更新/删除(此前仅更新已存在站点, 无法增删)
+        # 站点名即本地库名后缀(sum_<site>), 校验字母开头+字母/数字/下划线
+        valid = re.compile(r'^[a-zA-Z][a-zA-Z0-9_]*$')
+        config.sites = {
+            name: SiteConfig(
+                name=name,
+                ssh=upd.ssh,
+                remote_db=upd.remote_db,
+                uptnew_mode=upd.uptnew_mode,
+            )
+            for name, upd in body.sites.items()
+            if valid.match(name)
+        }
     if body.business:
         config.business = body.business
     config.save()

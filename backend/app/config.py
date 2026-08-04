@@ -111,16 +111,7 @@ class AppConfig(BaseModel):
             with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
             cfg = cls(**data)
-            # merge any missing sites (e.g. newly added code sites) into saved config
-            for site in SITES:
-                if site not in cfg.sites:
-                    d = SITE_DEFAULTS.get(site, {})
-                    cfg.sites[site] = SiteConfig(
-                        name=site,
-                        ssh=SSHRemoteConfig(**d.get("ssh", {})),
-                        remote_db=RemoteDBConfig(**d.get("remote_db", {})),
-                        uptnew_mode=d.get("uptnew_mode", "full"),
-                    )
+            # 站点完全由已存配置决定(支持界面增删后持久化); 不再强制补齐内置 SITES
             cls._cache = cfg
             cls._cache_mtime = mtime
             return cfg

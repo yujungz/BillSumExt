@@ -30,6 +30,7 @@
 
         <!-- Tab 2: 站点SSH配置 -->
         <el-tab-pane label="站点SSH配置" name="ssh">
+          <div class="site-tabs-wrap">
           <el-tabs v-model="activeSite" type="card">
             <el-tab-pane v-for="site in sites" :key="site" :label="site" :name="site">
               <div v-if="config.sites[site]">
@@ -83,6 +84,11 @@
               </div>
             </el-tab-pane>
           </el-tabs>
+          <div class="site-tab-actions">
+            <el-button size="small" :icon="Plus" circle title="新增站点" @click="addSite" />
+            <el-button size="small" :icon="Minus" circle title="删除当前站点" @click="deleteSite" />
+          </div>
+          </div>
         </el-tab-pane>
 
         <!-- Tab 3: 业务参数 -->
@@ -109,10 +115,12 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { Plus, Minus } from '@element-plus/icons-vue'
 import api from '../api'
 
-const sites = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
+const DEFAULT_SITE_NAMES = ['ai', 'csp', 'pinova', 'wzg', 'qn', 'digitalcloud', 'wshk']
+const sites = ref([...DEFAULT_SITE_NAMES])
 const activeTab = ref('mysql')
 const activeSite = ref('wzg')
 const fileInputs = ref([])
@@ -142,33 +150,34 @@ const config = reactive({
   },
 })
 
+function buildSiteConfig(name, d) {
+  const src = d || {}
+  return {
+    name,
+    ssh: { host: '', port: 22, user: 'root', key_path: '', remote_path: '~/data/', backup: 1, ...(src.ssh || {}) },
+    remote_db: { container_name: '', db_name: 'new-api', password: '', ...(src.remote_db || {}) },
+    uptnew_mode: src.uptnew_mode,
+  }
+}
+
 onMounted(async () => {
   try {
     const { data } = await api.settings.get()
     Object.assign(config.mysql, data.mysql)
-    if (data.business) {
-      Object.assign(config.business, data.business)
-    }
-    for (const s of sites) {
-      const d = data.sites?.[s] || SITE_DEFAULTS[s]
-      config.sites[s] = {
-        name: s,
-        ssh: { host: '', port: 22, user: 'root', key_path: '', remote_path: '~/data/', backup: 1, ...d.ssh },
-        remote_db: { container_name: '', db_name: 'new-api', password: '', ...d.remote_db },
-        uptnew_mode: d.uptnew_mode,
-      }
+    if (data.business) Object.assign(config.business, data.business)
+    // 站点列表来自已存配置(支持界面增删后持久化); 空则回退默认
+    const names = data.sites && Object.keys(data.sites).length ? Object.keys(data.sites) : [...DEFAULT_SITE_NAMES]
+    sites.value = names
+    for (const s of names) {
+      config.sites[s] = buildSiteConfig(s, data.sites?.[s] || SITE_DEFAULTS[s])
     }
   } catch {
-    for (const s of sites) {
-      const d = SITE_DEFAULTS[s]
-      config.sites[s] = {
-        name: s,
-        ssh: { host: '', port: 22, user: 'root', key_path: '', remote_path: '~/data/', backup: 1, ...d.ssh },
-        remote_db: { container_name: '', db_name: 'new-api', password: '', ...d.remote_db },
-        uptnew_mode: d.uptnew_mode,
-      }
+    sites.value = [...DEFAULT_SITE_NAMES]
+    for (const s of DEFAULT_SITE_NAMES) {
+      config.sites[s] = buildSiteConfig(s, SITE_DEFAULTS[s])
     }
   }
+  if (!sites.value.includes(activeSite.value)) activeSite.value = sites.value[0]
 })
 
 async function testMysql() {
@@ -186,9 +195,70 @@ async function testRemoteDb(site) {
   data.success ? ElMessage.success(data.message) : ElMessage.error(data.message)
 }
 
-async function saveConfig() {
+async function persistConfig() {
   await api.settings.save({ mysql: config.mysql, sites: config.sites, business: config.business })
+}
+
+async function saveConfig() {
+  await persistConfig()
   ElMessage.success('配置已保存')
+}
+
+async function addSite() {
+  let name
+  try {
+    const { value } = await ElMessageBox.prompt(
+      '请输入站点名（字母开头，仅含字母/数字/下划线）。对应本地库为 sum_<站点名>',
+      '新增站点',
+      {
+        confirmButtonText: '确定',
+        cancelButtonText: '取消',
+        inputValidator: (v) => {
+          const s = (v || '').trim()
+          if (!s) return '站点名不能为空'
+          if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(s)) return '只能字母开头，且仅含字母、数字、下划线'
+          if (sites.value.includes(s)) return '站点名已存在'
+          return true
+        },
+      },
+    )
+    name = value.trim()
+  } catch { return }
+  // 复制当前选中站点的参数到新站点
+  const cur = config.sites[activeSite.value] || config.sites[sites.value[0]]
+  config.sites[name] = {
+    name,
+    ssh: { ...cur.ssh },
+    remote_db: { ...cur.remote_db },
+    uptnew_mode: cur.uptnew_mode,
+  }
+  sites.value = [...sites.value, name]
+  activeSite.value = name
+  ElMessage.success(`已新增站点 ${name}（本地库 sum_${name}）`)
+  await persistConfig()
+}
+
+async function deleteSite() {
+  if (sites.value.length <= 1) {
+    ElMessage.warning('最后一个站点不能删除')
+    return
+  }
+  const site = activeSite.value
+  try {
+    await ElMessageBox.confirm(
+      `确定删除站点「${site}」？本地库 sum_${site} 的数据不会被删除。`,
+      '删除站点',
+      { confirmButtonText: '删除', cancelButtonText: '取消', type: 'warning' },
+    )
+  } catch { return }
+  // 删除后跳转：非首个→上一个；首个→下一个
+  const idx = sites.value.indexOf(site)
+  const next = idx > 0 ? sites.value[idx - 1] : sites.value[idx + 1]
+  sites.value = sites.value.filter(s => s !== site)
+  delete config.sites[site]
+  activeSite.value = next
+  ElMessage.success(`已删除站点 ${site}`)
+  await persistConfig()
 }
 
 function triggerMount(site) {
@@ -225,4 +295,7 @@ async function onFileSelected(event, site) {
 .config-view { width: 100%; }
 .card-title { font-size: 16px; font-weight: bold; }
 h5 { margin: 12px 0 6px; color: #606266; }
+.site-tabs-wrap { position: relative; }
+.site-tab-actions { position: absolute; right: 10px; top: 6px; z-index: 2; display: flex; gap: 6px; }
+.site-tabs-wrap :deep(.el-tabs__header) { padding-right: 86px; }
 </style>
