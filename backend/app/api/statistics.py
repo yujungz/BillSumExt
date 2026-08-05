@@ -81,9 +81,13 @@ def _write_zip_metadata(zf, sheet_count, sheet_names):
         f'{"".join(wbrs)}</Relationships>')
 
 
-def _detail_where_sql(filters):
+def _detail_where_sql(filters, show_zero_token=True):
     """构建 WHERE 字符串(值内联, 供 mysql -e 子进程)。"""
     conditions = ["l.windup_type < 2"]
+    if not show_zero_token:
+        # 0 Token 隐藏: 仅保留输入与输出 tokens 均 > 0 的记录
+        conditions.append("l.prompt_tokens > 0")
+        conditions.append("l.completion_tokens > 0")
     if filters:
         for key, val in filters.items():
             if not val:
@@ -160,10 +164,14 @@ def _col_width(label: str) -> float:
     return max(w, 8)
 
 
-def _detail_where(filters: dict | None):
+def _detail_where(filters: dict | None, show_zero_token: bool = True):
     """Build WHERE clause for the detail SQL (no windup_type filter needed)."""
     conditions = ["l.windup_type < 2"]
     params = []
+    if not show_zero_token:
+        # 0 Token 隐藏: 仅保留输入与输出 tokens 均 > 0 的记录
+        conditions.append("l.prompt_tokens > 0")
+        conditions.append("l.completion_tokens > 0")
     if filters:
         ds = filters.get("date_start")
         de = filters.get("date_end")
@@ -308,7 +316,8 @@ _STATS_EXPORT_TASKS: dict[str, dict] = {}
 
 
 def start_stats_detail_task(site: str, table_name: str, filters: dict | None,
-                            show_channel_name: bool, fields: str) -> str:
+                            show_channel_name: bool, fields: str,
+                            show_zero_token: bool = True) -> str:
     """Start a background detail export task, return task_id immediately."""
     task_id = uuid.uuid4().hex[:8]
     _STATS_EXPORT_TASKS[task_id] = {
@@ -325,7 +334,7 @@ def start_stats_detail_task(site: str, table_name: str, filters: dict | None,
 
     async def _run():
         try:
-            await _run_stats_detail(task_id, site, table_name, filters, show_channel_name, fields)
+            await _run_stats_detail(task_id, site, table_name, filters, show_channel_name, fields, show_zero_token)
             _STATS_EXPORT_TASKS[task_id]["status"] = "done"
         except Exception as e:
             log.exception("stats detail export task %s failed", task_id)
@@ -341,7 +350,8 @@ def start_stats_detail_task(site: str, table_name: str, filters: dict | None,
 
 async def _run_stats_detail(task_id: str, site: str, table_name: str,
                             filters: dict | None,
-                            show_channel_name: bool, fields: str):
+                            show_channel_name: bool, fields: str,
+                            show_zero_token: bool = True):
     task = _STATS_EXPORT_TASKS[task_id]
     task["progress"] = "查询列配置..."
     show_ch = show_channel_name
@@ -350,7 +360,7 @@ async def _run_stats_detail(task_id: str, site: str, table_name: str,
         task["error"] = "无可导出列"
         return
 
-    where, params = _detail_where(filters)
+    where, params = _detail_where(filters, show_zero_token)
     config_req = type("Config", (), {"db_name": f"sum_{site}", "table_name": table_name})()
 
     task["progress"] = "准备写入..."
@@ -736,7 +746,7 @@ async def export_stats_async(req: StatsRequest):
 
                 # 2. detail SQL + mysql TSV dump → /tmp(磁盘, 不撑爆 /dev/shm)
                 detail_cols = _build_detail_columns(req.show_channel_name, req.fields)
-                where = _detail_where_sql(req.filters)
+                where = _detail_where_sql(req.filters, req.show_zero_token)
                 detail_sql = _build_detail_sql(req.table_name, detail_cols, req.show_channel_name, where)
                 tsv_path = tempfile.mktemp(suffix=".tsv")  # /tmp 磁盘
                 tmp_files.append(tsv_path)
@@ -824,7 +834,7 @@ async def export_stats_detail(req: StatsRequest):
     if not detail_cols:
         return Response(content=b"", status_code=204)
 
-    where, params = _detail_where(req.filters)
+    where, params = _detail_where(req.filters, req.show_zero_token)
 
     wb = openpyxl.Workbook(write_only=True)
     await _write_detail_sheets(wb, config_req, detail_cols, where, params)
@@ -845,7 +855,7 @@ async def export_stats_detail_async(req: StatsRequest):
     filters_dict = req.filters
     task_id = start_stats_detail_task(
         req.site, req.table_name, filters_dict,
-        req.show_channel_name, req.fields
+        req.show_channel_name, req.fields, req.show_zero_token
     )
     return {"task_id": task_id}
 
