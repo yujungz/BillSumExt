@@ -18,7 +18,7 @@ async def query_stats(
     group_by options: "month", "day", "user", "channel", "model", "token", "group"
     filters: {user_id, channel_id, model_name, username, channel_name}
     show_zero: if False, filter out records with zero total_cost
-    show_zero_token: if False, filter out records where output_tokens is 0
+    show_zero_token: if False, keep only records where both input_tokens and output_tokens > 0
     show_channel_name: if False, channel granularity skips channel_name column
     """
     config = AppConfig.load()
@@ -143,8 +143,8 @@ async def query_stats(
     if not show_zero:
         having_parts.append("total_cost > 0")
     if not show_zero_token:
-        # 隐藏: 剔除"输出token为0"的记录(输入>0但输出=0 也剔除)
-        having_parts.append("output_tokens > 0")
+        # 隐藏: 仅保留输入与输出 tokens 均大于 0 的记录(任一为 0 即剔除)
+        having_parts.append("(input_tokens > 0 AND output_tokens > 0)")
     having_clause = ("HAVING " + " AND ".join(having_parts)) if having_parts else ""
 
     where_clause = ""
